@@ -10,6 +10,8 @@ on:
     paths-ignore:
       - 'docs/**'
       - '**.md'
+      - 'codemagic.yaml'
+      - '.github/workflows/probe.yml'
 
 jobs:
   build:

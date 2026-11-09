@@ -1,0 +1,51 @@
+workflows:
+  ios-unsigned:
+    name: Build unsigned IPA
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    environment:
+      node: latest
+      xcode: latest
+      vars:
+        SCHEME: XiYOClone
+    scripts:
+      - name: Install Rust + iOS target
+        script: |
+          curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal
+          source "$HOME/.cargo/env"
+          rustup target add aarch64-apple-ios
+      - name: Build Rust static lib
+        script: |
+          source "$HOME/.cargo/env"
+          cd Rust
+          cargo build --release --target aarch64-apple-ios
+          mkdir -p ../App/Bridge/lib
+          cp target/aarch64-apple-ios/release/libidevice_ffi.a ../App/Bridge/lib/
+          ls -lh ../App/Bridge/lib/
+          nm -gU ../App/Bridge/lib/libidevice_ffi.a | awk '{print $NF}' | grep -E '^_(pairing_|simulate_location|clear_location)' | sort
+      - name: Install XcodeGen and generate project
+        script: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build unsigned app
+        script: |
+          xcodebuild \
+            -project XiYOClone.xcodeproj \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+      - name: Package IPA
+        script: |
+          APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' | head -1)
+          echo "app = $APP"
+          mkdir -p out/Payload
+          cp -R "$APP" out/Payload/
+          cd out && zip -qr ../XiYOClone-unsigned.ipa Payload
+          ls -lh ../XiYOClone-unsigned.ipa
+    artifacts:
+      - XiYOClone-unsigned.ipa
