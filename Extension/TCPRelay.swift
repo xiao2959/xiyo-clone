@@ -48,6 +48,20 @@ struct TCPSegment {
     static let PSH: UInt8 = 0x08
     static let ACK: UInt8 = 0x10
 
+    /// 必须显式写：本类型在主体里定义了 `init?(bytes:offset:)`，
+    /// Swift 就不再自动合成 memberwise init，而 RelayConnection.send() 需要它。
+    /// （这是真编译错误，不是风格问题）
+    init(srcPort: UInt16, dstPort: UInt16, seq: UInt32, ack: UInt32,
+         flags: UInt8, window: UInt16, payload: [UInt8]) {
+        self.srcPort = srcPort
+        self.dstPort = dstPort
+        self.seq = seq
+        self.ack = ack
+        self.flags = flags
+        self.window = window
+        self.payload = payload
+    }
+
     init?(bytes: [UInt8], offset: Int) {
         guard bytes.count >= offset + 20 else { return nil }
         let b = bytes

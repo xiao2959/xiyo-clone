@@ -92,3 +92,98 @@ cd xiyo-lab\app-skeleton\Rust
 cargo +stable-x86_64-pc-windows-gnu build
 nm -g --defined-only target\debug\libidevice_ffi.a | findstr " T "
 ```
+
+
+---
+
+# 第二轮：NAT / TCP 协议逻辑验证（2026-11-09）
+
+> Swift 在 Windows 上编不了，但**协议逻辑可以逐行移植到 Python 用真实 socket 验证**。
+
+## 方法
+
+`tools/test_tcprelay.py` 把 `Extension/TCPRelay.swift` 的算法逐行复刻成 Python：
+
+| Swift | Python 复刻 |
+|---|---|
+| `checksum(_:)` | `checksum()` |
+| `buildIPv4TCP(...)` | `build_ipv4_tcp()` |
+| `TCPSegment.init?(bytes:offset:)` | `parse_packet()` |
+| `RelayConnection.onSYN/onData/onFIN/send` | `RelayConnection.*` |
+
+然后用一个真实的 `127.0.0.1` 回显服务验证端到端。
+
+## 结果（全部通过）
+
+```
+=== 测试 1：校验和实现 ===
+  12345678                 -> csum=9753  填回后反码和=ffff
+  000102...111213          -> csum=a59b  填回后反码和=ffff
+  6162636465666768         -> csum=6e6a  填回后反码和=ffff
+  000100020003             -> csum=fff9  填回后反码和=ffff
+  deadbeef                 -> csum=6262  填回后反码和=ffff
+  ✅ 校验和正常
+
+=== 测试 2：IPv4 头校验和 ===
+  ✅ IP 头校验和正确
+
+=== 测试 3：TCP 校验和（含伪首部）===
+  ✅ TCP 校验和正确
+
+=== 测试 4：真实 socket 握手 + 数据转发 ===
+  SYN-ACK: flags=0x12 seq=305419897 ack=1001     ✅
+  回包: flags=0x18 payload=b'ECHO:hello-from-client'
+  ✅ 数据成功往返（客户端 -> 127.0.0.1 -> 回给客户端）
+  ✅ 数据包 TCP 校验和正确
+  ✅ seq 递增正确
+  FIN: flags=0x11                                 ✅
+
+✅ 全部通过
+```
+
+## 由此确认的事实
+
+| 项 | 结论 |
+|---|---|
+| 校验和算法正确 | 含伪首部的 TCP 校验和、IP 头校验和都能自校验 |
+| 三次握手正确 | SYN → SYN-ACK，`ack = clientISN + 1`，端口方向正确 |
+| 数据转发正确 | 客户端数据经 relay 到 127.0.0.1:port，回包内容一致 |
+| seq 递增正确 | SYN-ACK 后数据包 `seq = serverISN + 1` |
+| FIN 收尾正确 | 客户端 FIN → 回 FIN+ACK |
+
+## 测试中我自己犯的错（也修了）
+
+第一版测试把"校验和自校验"判据写成 `== 0`，结果全红。
+正确判据是**一次性补码和为 `0xFFFF`**（`0` 是"再取反后"的说法）。
+算法本身没错，是**测试写错了** —— 这类"验证器本身有 bug"的情况，如果不看具体数值很容易误判成代码错。
+
+---
+
+# 第三轮：又发现 2 个真问题
+
+## 1. `TCPSegment` 缺 memberwise init（**必然编译失败**）
+
+```swift
+struct TCPSegment {
+    init?(bytes: [UInt8], offset: Int) { ... }   // 自定义了 init
+}
+// 于是 Swift 不再自动合成：
+TCPSegment(srcPort:dstPort:seq:ack:flags:window:payload:)  // ❌ 编译错误
+```
+
+**已修**：显式补上这个 init。
+
+## 2. `NSBonjourServices` 写错服务名
+
+```diff
+- <string>_stikpairprobe._tcp</string>
++ <string>_remotepairing-pairable-host._tcp</string>
+```
+
+`_stikpairprobe` 是 StikDebug 自己的探测服务；我们发布的是
+`_remotepairing-pairable-host._tcp`（idevice 的 `PAIRABLE_HOST_SERVICE_TYPE`）。
+名字不匹配 → **iOS 拒绝发布 Bonjour → 配对页永远等不到设备连入**。
+
+## 3. 顺带修的
+
+- `App/Info.plist` 的 `MinimumOSVersion` 15.0 → 17.0（否则和 `Map(position:)` 冲突）
