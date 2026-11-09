@@ -1,0 +1,23 @@
+name: probe-macos
+
+# 探针：一次性试所有 macOS runner 标签，看哪个在当前账号可用
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/probe.yml'
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-13, macos-14, macos-15, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: info
+        run: |
+          echo "label=${{ matrix.os }}"
+          sw_vers
+          uname -m
+          xcodebuild -version
