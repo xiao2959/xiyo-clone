@@ -187,3 +187,103 @@ TCPSegment(srcPort:dstPort:seq:ack:flags:window:payload:)  // ❌ 编译错误
 ## 3. 顺带修的
 
 - `App/Info.plist` 的 `MinimumOSVersion` 15.0 → 17.0（否则和 `Map(position:)` 冲突）
+
+
+---
+
+# 第四轮：装上 Swift 编译器，做真实语法检查
+
+## 环境
+
+```
+winget install Swift.Toolchain        # 6.4.2
+swiftc --version → Swift version 6.4.2 (swift-6.4.2-RELEASE)
+                    Target: x86_64-unknown-windows-msvc
+```
+
+## 结果：8/8 文件语法全部通过
+
+```bash
+swiftc -parse App/**/*.swift Extension/**/*.swift
+```
+
+```
+  OK    App.swift
+  OK    ContentView.swift
+  OK    DiagView.swift
+  OK    PairingView.swift
+  OK    TunnelManager.swift
+  OK    Bridge.swift
+  OK    PacketTunnelProvider.swift
+  OK    TCPRelay.swift
+失败数: 0
+```
+
+**这证明了什么**：所有 Swift 文件**语法层面无误**（括号、泛型、闭包、可选绑定、switch 等）。
+`-parse` 只做词法+语法分析，不解析 import、不做类型检查，所以能绕开"Windows 上没有 SwiftUI/NetworkExtension"的问题。
+
+## 为什么做不到类型检查（诚实说明）
+
+```bash
+swiftc -sdk <Windows.sdk> -typecheck App/Bridge/Bridge.swift
+# error: unable to load standard library
+```
+
+带上 SDK 后又会卡在这里：
+
+```
+clang/include/intrin.h:22: #include <x86intrin.h>   ← 这个头文件来自 MSVC
+```
+
+标准库和 Clang 头需要 **MSVC Build Tools**（几个 GB）。试过用 mingw 的头文件替代：
+
+```
+mingw64/.../stdlib.h:274: error: expected ';' after top level declarator
+```
+
+**头文件不兼容**，clang 解析 mingw 的 stdlib 直接崩。所以类型检查在 Windows 上做不了，
+必须靠 GitHub Actions（macOS）或真 Mac。
+
+## 结论：三层验证，各管一段
+
+| 层 | 手段 | 状态 |
+|---|---|---|
+| Rust 静态库 | `cargo build` + `nm` | ✅ 通过，9 符号 |
+| TCP/NAT 协议逻辑 | Python 逐行复刻 + 真 socket | ✅ 通过 |
+| Swift 语法 | `swiftc -parse` | ✅ 8/8 通过 |
+| Swift 类型检查 | 需要 Apple SDK | ❌ Windows 做不到 → 交给 Actions |
+
+---
+
+# 第五轮：加了应用内自检页（真机排障用）
+
+## 为什么加
+
+真机出问题时，"你描述现象 → 我猜 → 你改 → 再看" 这个循环太慢。
+现在改成：**App 自己把 8 项检查跑一遍，你截图给我**。
+
+## 8 项检查
+
+| # | 检查 | 失败说明什么 |
+|---|---|---|
+| 1 | VPN 配置已安装 | 还没点过「连接隧道」 |
+| 2 | VPN 已连接 | 隧道没起来 |
+| 3 | 扩展响应 `ping` | **扩展没被签进 App**（最常见） |
+| 4 | 扩展能连 `127.0.0.1:62078` | 设备上 lockdownd 不通 |
+| 5 | App 能连 `10.7.0.1:62078` | **TCPRelay 的 NAT 没工作** |
+| 6 | `pairing.plist` 存在 | 配对没做完 |
+| 7 | `pairing.plist` 可解析 | 文件损坏 |
+| 8 | 定位服务可打开 | 配对无效 / 开发者模式没开 |
+
+## 配套实现
+
+- 扩展新增 `check-lockdown` 消息：扩展自己连一次 `127.0.0.1:62078` 并回报结果
+- `TunnelManager` 暴露 `hasConfiguration`
+- 8 个 `@State` 检查项 + TCP 探测（3 秒超时）
+- 所有 UI 更新都回到主线程（`stepMain`）
+
+## 验证
+
+- `swiftc -parse DiagView.swift` → OK
+- 跨文件符号一致性脚本检查 → 8/8 OK
+- 括号平衡 → 全部 0

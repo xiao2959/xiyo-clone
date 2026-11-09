@@ -15,3 +15,8 @@ Payload/
 # 系统
 .DS_Store
 Thumbs.db
+
+# 本机辅助脚本
+push-to-github.ps1
+推送.cmd
+
