@@ -132,8 +132,13 @@ struct DiagView: View {
     }
 
     private func step(_ i: Int) {
+        // 可能从后台回调进来（比如 probe / Bridge.clear），统一回主线程再动 @State
+        DispatchQueue.main.async { stepMain(i) }
+    }
+
+    private func stepMain(_ i: Int) {
         guard i < items.count else {
-            DispatchQueue.main.async { running = false }
+            running = false
             return
         }
         mark(i, .running)
