@@ -1,0 +1,47 @@
+name: XiYOClone
+options:
+  bundleIdPrefix: com.lab.xiyoclone
+  deploymentTarget:
+    iOS: "15.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    DEVELOPMENT_TEAM: ""          # 填你的 Team ID（个人/企业证书）
+    CODE_SIGN_STYLE: Manual
+
+targets:
+  XiYOClone:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+        excludes: ["Info.plist", "App.entitlements"]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lab.xiyoclone
+        INFOPLIST_FILE: App/Info.plist
+        CODE_SIGN_ENTITLEMENTS: App/App.entitlements
+        SWIFT_OBJC_BRIDGING_HEADER: "App/Bridge/include/idevice_ffi.h"
+        OTHER_LDFLAGS: ["-lresolv", "-lidevice_ffi"]
+    dependencies:
+      - target: LocalVPNExtension
+        embed: true
+        codeSign: true
+      - sdk: NetworkExtension.framework
+      - sdk: MapKit.framework
+
+  LocalVPNExtension:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Extension
+        excludes: ["Info.plist", "Extension.entitlements"]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lab.xiyoclone.LocalVPNExtension
+        INFOPLIST_FILE: Extension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Extension/Extension.entitlements
+    dependencies:
+      - sdk: NetworkExtension.framework

@@ -1,0 +1,19 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+  <key>CFBundleName</key><string>XiYOClone</string>
+  <key>CFBundleDisplayName</key><string>定位隧道</string>
+  <key>CFBundleShortVersionString</key><string>1.0</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>MinimumOSVersion</key><string>15.0</string>
+  <key>UILaunchScreen</key><dict/>
+  <key>UIBackgroundModes</key><array><string>location</string><string>fetch</string></array>
+  <key>NSLocationWhenInUseUsageDescription</key><string>用于模拟定位</string>
+  <key>NSLocationAlwaysAndWhenInUseUsageDescription</key><string>需要后台定位权限以保持定位模拟服务运行</string>
+  <key>NSLocalNetworkUsageDescription</key><string>用于发现配对的设备并生成配对文件</string>
+  <key>NSBonjourServices</key><array><string>_stikpairprobe._tcp</string><string>_remotepairing._tcp</string></array>
+</dict>
+</plist>

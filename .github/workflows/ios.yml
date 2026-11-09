@@ -1,0 +1,77 @@
+name: build-ios
+
+# 没有 Mac 也能出 IPA：用 GitHub 的 macOS runner（公开仓库免费，私有仓库每月 2000 分钟）
+# 产物是**未签名** IPA，再用全能签/你自己的证书签一下即可装。
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'app-skeleton/**'
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 40
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---------- 1. Rust -> iOS 静态库 ----------
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - name: Build libidevice_ffi.a
+        working-directory: app-skeleton/Rust
+        run: |
+          cargo build --release --target aarch64-apple-ios
+          mkdir -p ../App/Bridge/lib
+          cp target/aarch64-apple-ios/release/libidevice_ffi.a ../App/Bridge/lib/
+          ls -lh ../App/Bridge/lib/
+          echo "--- exported symbols ---"
+          nm -gU ../App/Bridge/lib/libidevice_ffi.a \
+            | awk '{print $NF}' \
+            | grep -E '^_(pairing_|simulate_location|clear_location)' \
+            | sort
+
+      # ---------- 2. 生成 Xcode 工程 ----------
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        working-directory: app-skeleton
+        run: xcodegen generate
+
+      # ---------- 3. 编译（不签名） ----------
+      - name: Build (unsigned)
+        working-directory: app-skeleton
+        run: |
+          xcodebuild \
+            -project XiYOClone.xcodeproj \
+            -scheme XiYOClone \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      # ---------- 4. 打包成 IPA ----------
+      - name: Package IPA
+        working-directory: app-skeleton
+        run: |
+          APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' | head -1)
+          echo "app = $APP"
+          mkdir -p out/Payload
+          cp -R "$APP" out/Payload/
+          cd out && zip -qr ../XiYOClone-unsigned.ipa Payload
+          ls -lh ../XiYOClone-unsigned.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: XiYOClone-unsigned-ipa
+          path: app-skeleton/XiYOClone-unsigned.ipa
+          if-no-files-found: error

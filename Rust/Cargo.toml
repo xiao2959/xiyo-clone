@@ -1,0 +1,29 @@
+﻿[package]
+name = "idevice_ffi"
+version = "0.3.0"
+edition = "2021"
+
+# API 全部按 idevice 0.1.68 源码核实（见 docs/API-VERIFIED.md）：
+#   remote_pairing::PairableHost::accept(&mut RpPairingFile, pin_callback)
+#   remote_pairing::PairableHostInfo::{generate, mdns_txt_records}
+#   remote_pairing::RpPairingSocket::new_device(stream)
+#   provider::TcpProvider { addr, scope_id, pairing_file, label }
+#   services::simulate_location::LocationSimulationService::{connect, set, clear}
+[dependencies]
+idevice = { version = "0.1.68", default-features = false, features = [
+    "tcp",
+    "pair",
+    "location_simulation",
+    "remote_pairing",
+    "rustcrypto",
+] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "sync"] }
+
+[lib]
+crate-type = ["staticlib"]
+name = "idevice_ffi"
+
+[profile.release]
+lto = true
+opt-level = "z"
+panic = "abort"

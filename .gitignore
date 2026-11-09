@@ -1,0 +1,17 @@
+﻿# Rust
+Rust/target/
+App/Bridge/lib/*.a
+
+# Xcode
+*.xcodeproj
+build/
+DerivedData/
+
+# 产物
+*.ipa
+out/
+Payload/
+
+# 系统
+.DS_Store
+Thumbs.db
