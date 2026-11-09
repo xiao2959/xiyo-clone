@@ -15,6 +15,7 @@ struct ContentView: View {
     @State private var target = CLLocationCoordinate2D(latitude: 39.9042, longitude: 116.4074)
     @State private var message = "未连接"
     @State private var showPairing = false
+    @State private var showDiag = false
     @State private var paired = false
     @State private var busy = false
 
@@ -40,6 +41,7 @@ struct ContentView: View {
                         Button(paired ? "已配对（重新配对）" : "配对设备（显示 6 位码）") {
                             showPairing = true
                         }
+                        Button("自检（出问题先跑这个）") { showDiag = true }
                     }
 
                     Section("目标坐标") {
@@ -64,6 +66,9 @@ struct ContentView: View {
             .onAppear {
                 tunnel.load()
                 paired = FileManager.default.fileExists(atPath: Bridge.pairingPath)
+            }
+            .sheet(isPresented: $showDiag) {
+                DiagView(tunnel: tunnel)
             }
             .sheet(isPresented: $showPairing, onDismiss: {
                 paired = FileManager.default.fileExists(atPath: Bridge.pairingPath)

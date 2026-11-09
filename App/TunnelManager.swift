@@ -13,7 +13,10 @@ final class TunnelManager: ObservableObject {
     @Published var status: NEVPNStatus = .invalid
     @Published var lastError: String?
 
-    private var manager: NETunnelProviderManager?
+    private(set) var manager: NETunnelProviderManager?
+
+    /// 自检用：配置是否已创建
+    var hasConfiguration: Bool { manager != nil }
 
     func load() {
         NETunnelProviderManager.loadAllFromPreferences { [weak self] managers, error in

@@ -57,10 +57,36 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
         guard let text = String(data: messageData, encoding: .utf8) else { completionHandler?(nil); return }
         switch text {
-        case "ping": completionHandler?("pong".data(using: .utf8))
+        case "ping":
+            completionHandler?("pong".data(using: .utf8))
+
         case "stats":
             completionHandler?("{\"ok\":true}".data(using: .utf8))
-        default: completionHandler?(nil)
+
+        case "check-lockdown":
+            // 自检用：扩展自己连一次 127.0.0.1:62078，证明这条链路存在
+            // （App 侧连 10.7.0.1:62078 走的就是这个目标）
+            let conn = NWConnection(host: "127.0.0.1", port: 62078, using: .tcp)
+            var replied = false
+            func reply(_ s: String) {
+                if replied { return }
+                replied = true
+                completionHandler?(s.data(using: .utf8))
+                conn.cancel()
+            }
+            conn.stateUpdateHandler = { st in
+                switch st {
+                case .ready: reply("ok")
+                case .failed(let e): reply("failed: \(e.localizedDescription)")
+                case .waiting(let e): reply("waiting: \(e.localizedDescription)")
+                default: break
+                }
+            }
+            conn.start(queue: .global())
+            DispatchQueue.global().asyncAfter(deadline: .now() + 3) { reply("timeout") }
+
+        default:
+            completionHandler?(nil)
         }
     }
 
