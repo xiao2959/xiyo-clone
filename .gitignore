@@ -20,3 +20,10 @@ Thumbs.db
 push-to-github.ps1
 推送.cmd
 
+
+# 本机运维脚本（含基础设施信息，不要提交）
+tunnel/
+一键发布.cmd
+启动GitHub通道.cmd
+一键发布.ps1
+启动GitHub通道.ps1
