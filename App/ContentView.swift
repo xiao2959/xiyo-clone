@@ -109,9 +109,10 @@ struct ContentView: View {
                 }
             }
             .mapControls { MapCompass(); MapScaleView() }
-            .onTapGesture { screenPoint in
+            .onTapGesture(coordinateSpace: .local) { location in
                 // iOS 17 起：把屏幕点换算成地图坐标
-                if let coord = proxy.convert(screenPoint, from: .local) {
+                // 注意必须写 coordinateSpace:，否则闭包参数与 onTapGesture(perform:) 不匹配
+                if let coord = proxy.convert(location, from: .local) {
                     pick(coord)
                 }
             }

@@ -29,6 +29,7 @@ workflows:
           xcodegen generate
       - name: Build unsigned app
         script: |
+          set +e
           xcodebuild \
             -project XiYOClone.xcodeproj \
             -scheme "$SCHEME" \
@@ -38,7 +39,21 @@ workflows:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            build
+            build > xcodebuild.log 2>&1
+          RC=$?
+          echo "xcodebuild exit=$RC"
+          if [ $RC -ne 0 ]; then
+            echo "==================== SWIFT ERRORS ===================="
+            grep -nE "\.swift:[0-9]+:[0-9]+: error" xcodebuild.log | head -40
+            echo "==================== SWIFT ERRORS ===================="
+            grep -nE "error:" xcodebuild.log | grep -v "warning:" | head -40
+            echo "==================== SWIFT ERRORS ===================="
+            grep -nA3 "The following build commands failed" xcodebuild.log | head -20
+            echo "==================== SWIFT ERRORS ===================="
+            tail -60 xcodebuild.log
+            exit 1
+          fi
+          echo "BUILD OK"
       - name: Package IPA
         script: |
           APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' | head -1)
