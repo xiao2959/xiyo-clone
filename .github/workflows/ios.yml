@@ -6,8 +6,10 @@ name: build-ios
 on:
   workflow_dispatch:
   push:
-    paths:
-      - 'app-skeleton/**'
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
 
 jobs:
   build:
