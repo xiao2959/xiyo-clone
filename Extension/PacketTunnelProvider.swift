@@ -31,8 +31,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: gateway)
 
         let ipv4 = NEIPv4Settings(addresses: [gateway], subnetMasks: [mask])
+        // 只接管 10.7.0.0/24；其余流量 iOS 会自动直连（这就是分流）
         ipv4.includedRoutes = [NEIPv4Route(destinationAddress: net, subnetMask: mask)]
-        ipv4.excludedRoutes = [NEIPv4Route.default()]
         settings.ipv4Settings = ipv4
         settings.mtu = 1400
 

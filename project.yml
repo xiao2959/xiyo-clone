@@ -2,14 +2,16 @@ name: XiYOClone
 options:
   bundleIdPrefix: com.lab.xiyoclone
   deploymentTarget:
-    iOS: "15.0"
+    iOS: "17.0"
   createIntermediateGroups: true
 
 settings:
   base:
-    SWIFT_VERSION: "5.9"
-    DEVELOPMENT_TEAM: ""          # 填你的 Team ID（个人/企业证书）
+    SWIFT_VERSION: "5.0"
+    # 不设 DEVELOPMENT_TEAM：CI 里用 CODE_SIGNING_ALLOWED=NO 编未签名包；
+    # 你自己在 Xcode 里用全能签/个人证书时再填 Team。
     CODE_SIGN_STYLE: Manual
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
 
 targets:
   XiYOClone:
@@ -17,14 +19,26 @@ targets:
     platform: iOS
     sources:
       - path: App
-        excludes: ["Info.plist", "App.entitlements"]
+        excludes:
+          - "Info.plist"
+          - "App.entitlements"
+          - "Bridge/include"    # 纯头文件，不参与编译
+          - "Bridge/lib"        # CI 拷进来的 .a，不能当源码
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.lab.xiyoclone
         INFOPLIST_FILE: App/Info.plist
         CODE_SIGN_ENTITLEMENTS: App/App.entitlements
-        SWIFT_OBJC_BRIDGING_HEADER: "App/Bridge/include/idevice_ffi.h"
-        OTHER_LDFLAGS: ["-lresolv", "-lidevice_ffi"]
+        # Rust 静态库位置（CI 会把 libidevice_ffi.a 拷到 App/Bridge/lib/）
+        LIBRARY_SEARCH_PATHS:
+          - "$(inherited)"
+          - "$(SRCROOT)/App/Bridge/lib"
+        OTHER_LDFLAGS:
+          - "$(inherited)"
+          - "-lidevice_ffi"
+          - "-lresolv"
+        # 不要 bridging header：Bridge.swift 全部用 @_silgen_name 声明 C 函数
+        SWIFT_OBJC_BRIDGING_HEADER: ""
     dependencies:
       - target: LocalVPNExtension
         embed: true
@@ -37,7 +51,9 @@ targets:
     platform: iOS
     sources:
       - path: Extension
-        excludes: ["Info.plist", "Extension.entitlements"]
+        excludes:
+          - "Info.plist"
+          - "Extension.entitlements"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.lab.xiyoclone.LocalVPNExtension
@@ -45,3 +61,12 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Extension/Extension.entitlements
     dependencies:
       - sdk: NetworkExtension.framework
+
+# 显式 scheme，否则 xcodebuild -scheme 找不到
+schemes:
+  XiYOClone:
+    build:
+      targets:
+        XiYOClone: all
+    run:
+      config: Debug
