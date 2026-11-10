@@ -8,11 +8,23 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    # 不设 DEVELOPMENT_TEAM：CI 里用 CODE_SIGNING_ALLOWED=NO 编未签名包；
-    # 你自己在 Xcode 里用全能签/个人证书时再填 Team。
     CODE_SIGN_STYLE: Manual
     ENABLE_USER_SCRIPT_SANDBOXING: NO
 
+# ===========================================================================
+# B 轮优化：纯换算 App
+#
+#   A 轮确认 rppairing→隧道→RSD 注入链路无法在当前环境验证，
+#   因此把整个 NetworkExtension 扩展、Rust 静态库、配对/自检 UI 全部移除。
+#
+#   现在 App 只做三件能 100% 验证的事：
+#     1. 地图点选（MapKit）
+#     2. GCJ-02 → WGS-84 换算（CoordTransform，已与 Python 逐位比对）
+#     3. 复制坐标 / 生成 GPX 分享 / 打开 StikDebug（stikdebug://）
+#
+#   好处：不再需要 NE entitlement，全能签随便签就能装；
+#         不再有"扩展无响应 / 10.7.0.1 不通 / 注入失败 -1"。
+# ===========================================================================
 targets:
   XiYOClone:
     type: application
@@ -22,47 +34,22 @@ targets:
         excludes:
           - "Info.plist"
           - "App.entitlements"
-          - "Bridge/include"    # 纯头文件，不参与编译
-          - "Bridge/lib"        # CI 拷进来的 .a，不能当源码
+          # 旧链路文件：不再参与编译（保留在仓库里，便于以后恢复）
+          - "Bridge"
+          - "TunnelManager.swift"
+          - "DiagView.swift"
+          - "PairingView.swift"
+          - "BackgroundKeeper.swift"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.lab.xiyoclone
         INFOPLIST_FILE: App/Info.plist
-        CODE_SIGN_ENTITLEMENTS: App/App.entitlements
-        # Rust 静态库位置（CI 会把 libidevice_ffi.a 拷到 App/Bridge/lib/）
-        LIBRARY_SEARCH_PATHS:
-          - "$(inherited)"
-          - "$(SRCROOT)/App/Bridge/lib"
-        OTHER_LDFLAGS:
-          - "$(inherited)"
-          - "-lidevice_ffi"
-          - "-lresolv"
-        # 不要 bridging header：Bridge.swift 全部用 @_silgen_name 声明 C 函数
+        # 不再用 entitlements：纯 App 不需要任何特殊权限
+        CODE_SIGN_ENTITLEMENTS: ""
         SWIFT_OBJC_BRIDGING_HEADER: ""
     dependencies:
-      - target: LocalVPNExtension
-        embed: true
-        codeSign: true
-      - sdk: NetworkExtension.framework
       - sdk: MapKit.framework
 
-  LocalVPNExtension:
-    type: app-extension
-    platform: iOS
-    sources:
-      - path: Extension
-        excludes:
-          - "Info.plist"
-          - "Extension.entitlements"
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.lab.xiyoclone.LocalVPNExtension
-        INFOPLIST_FILE: Extension/Info.plist
-        CODE_SIGN_ENTITLEMENTS: Extension/Extension.entitlements
-    dependencies:
-      - sdk: NetworkExtension.framework
-
-# 显式 scheme，否则 xcodebuild -scheme 找不到
 schemes:
   XiYOClone:
     build:

@@ -1,4 +1,4 @@
-﻿//! idevice_ffi —— iOS 端 FFI 静态库入口
+//! idevice_ffi —— iOS 端 FFI 静态库入口
 //!
 //! 所有导出都在 `pairing` 模块（配对 + 注入），这里只声明模块。
 //!
@@ -10,3 +10,5 @@
 //! 依赖 idevice 0.1.68，API 已按 crates.io 源码核对（docs/API-VERIFIED.md）。
 
 pub mod pairing;
+pub mod pairing_kind;
+pub mod inject;

@@ -103,10 +103,11 @@ struct DiagView: View {
         }
         let rc = Bridge.pairingFileCheck()
         var tag = "rc=" + String(rc)
-        if rc == 0 { tag = "可解析" }
-        if rc == -1 { tag = "读取失败" }
+        if rc == 0 { tag = "lockdown 可直连" }
+        if rc == 1 { tag = "rppairing 有效" }
+        if rc == -1 { tag = "文件不存在" }
         if rc == -2 { tag = "空文件" }
-        if rc == -3 { tag = "格式不对" }
+        if rc == -3 { tag = "未知格式" }
         return tag + " " + String(size) + "B"
     }
 

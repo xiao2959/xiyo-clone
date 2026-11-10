@@ -103,6 +103,8 @@ struct PairingView: View {
         // 关键：用户要切到「设置」里点配对，App 会被切到后台。
         // 不申请后台执行时间的话，socket 会被系统挂起，配对就"没反应"。
         UIApplication.shared.isIdleTimerDisabled = true
+        // 用持续定位保持后台运行（Info.plist 已声明 location 后台模式）
+        BackgroundKeeper.shared.start()
         bgTask = UIApplication.shared.beginBackgroundTask(withName: "pairing") {
             if bgTask != .invalid {
                 UIApplication.shared.endBackgroundTask(bgTask)
@@ -126,7 +128,27 @@ struct PairingView: View {
 
         let st = Bridge.pairingStatus() ?? ""
         if st.isEmpty == false && st != "idle" {
+            // 原文形如 idle / waiting_pin / paired:<UDID> / error:<原因>
             detail = st
+            if st.hasPrefix("error:") {
+                t.invalidate()
+                running = false
+                service.stop()
+                BackgroundKeeper.shared.stop()
+                UIApplication.shared.isIdleTimerDisabled = false
+                status = "配对失败：" + st.replacingOccurrences(of: "error:", with: "")
+                return
+            }
+            if st.hasPrefix("paired:") {
+                t.invalidate()
+                running = false
+                done = true
+                service.stop()
+                BackgroundKeeper.shared.stop()
+                UIApplication.shared.isIdleTimerDisabled = false
+                status = "配对成功，配对文件已保存"
+                return
+            }
         }
 
         let rc = Bridge.pairingWait(timeoutMs: 0)
@@ -162,6 +184,7 @@ struct PairingView: View {
         timer = nil
         service.stop()
 
+        BackgroundKeeper.shared.stop()
         UIApplication.shared.isIdleTimerDisabled = false
         if bgTask != .invalid {
             UIApplication.shared.endBackgroundTask(bgTask)

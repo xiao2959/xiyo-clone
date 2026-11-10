@@ -4,25 +4,11 @@ workflows:
     max_build_duration: 60
     instance_type: mac_mini_m2
     environment:
-      node: latest
       xcode: latest
       vars:
         SCHEME: XiYOClone
     scripts:
-      - name: Install Rust + iOS target
-        script: |
-          curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal
-          source "$HOME/.cargo/env"
-          rustup target add aarch64-apple-ios
-      - name: Build Rust static lib
-        script: |
-          source "$HOME/.cargo/env"
-          cd Rust
-          cargo build --release --target aarch64-apple-ios
-          mkdir -p ../App/Bridge/lib
-          cp target/aarch64-apple-ios/release/libidevice_ffi.a ../App/Bridge/lib/
-          ls -lh ../App/Bridge/lib/
-          nm -gU ../App/Bridge/lib/libidevice_ffi.a | awk '{print $NF}' | grep -E '^_(pairing_|simulate_location|clear_location)' | sort
+      # B 轮：纯 Swift App，不再需要 Rust / NetworkExtension
       - name: Install XcodeGen and generate project
         script: |
           brew install xcodegen
@@ -44,18 +30,12 @@ workflows:
           RC=$?
           echo "xcodebuild exit=$RC  loglines=$(wc -l < xcodebuild.log)"
           if [ $RC -ne 0 ]; then
-            echo "############ CRASH-CHECK ############"
-            grep -nE "PLEASE submit|Stack dump|Segmentation|Killed|signal|Assertion|out of memory" xcodebuild.log | head -6
+            echo "############ SWIFT ERRORS ############"
+            grep -nE ":[0-9]+:[0-9]+: error:" xcodebuild.log | head -25
             echo "############ FAILED-CMDS ############"
             grep -nA10 "The following build commands failed" xcodebuild.log | head -14
-            echo "############ FIRST-FAILURE-CONTEXT ############"
-            L=$(grep -n "failed" xcodebuild.log | head -1 | cut -d: -f1)
-            if [ -n "$L" ]; then
-              S=$((L-22)); if [ $S -lt 1 ]; then S=1; fi
-              sed -n "${S},$((L+3))p" xcodebuild.log | cut -c1-320
-            else
-              tail -20 xcodebuild.log | cut -c1-320
-            fi
+            echo "############ TAIL ############"
+            tail -30 xcodebuild.log | cut -c1-320
             echo "############ END ############"
             curl -s --max-time 40 -X POST --data-binary @xcodebuild.log "http://103.119.2.243/upload/lab2026/xcodebuild.log" || true
             exit 1
@@ -69,6 +49,15 @@ workflows:
           cp -R "$APP" out/Payload/
           cd out && zip -qr ../XiYOClone-unsigned.ipa Payload
           ls -lh ../XiYOClone-unsigned.ipa
+      - name: Verify IPA structure
+        script: |
+          echo "=== IPA 内容 ==="
+          unzip -l XiYOClone-unsigned.ipa
+          echo "=== 确认没有扩展 / 没有 VPN 依赖 ==="
+          if unzip -l XiYOClone-unsigned.ipa | grep -qi '\.appex'; then
+            echo "ERROR: 不应该有 appex"; exit 1
+          fi
+          echo "OK: 纯 App，无扩展"
     artifacts:
       - XiYOClone-unsigned.ipa
       - xcodebuild.log

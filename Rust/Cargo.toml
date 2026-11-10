@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "idevice_ffi"
 version = "0.3.0"
 edition = "2021"
@@ -16,8 +16,16 @@ idevice = { version = "0.1.68", default-features = false, features = [
     "location_simulation",
     "remote_pairing",
     "rustcrypto",
+    "xpc",
+    "rsd",
+    "tunnel_tcp_stack",
+    "core_device_proxy",
+    "core_device",
 ] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "sync"] }
+
+[dev-dependencies]
+serde_json = "1"
 
 [lib]
 crate-type = ["staticlib"]

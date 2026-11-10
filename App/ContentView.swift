@@ -1,21 +1,22 @@
 //
-//  ContentView.swift
-//  主界面：地图点选 → 自动换算 → 注入
+//  ContentView.swift —— 优化版（B 轮）
 //
-//  ⚠️ 这个文件刻意写得"平铺直叙"，避免复杂 ViewBuilder 表达式。
-//     原因：swift-frontend 在复杂 SwiftUI 表达式上会崩（Failed frontend command，
-//     日志里只有 warning 没有 error）。瘦身后可稳定编译。
+//  设计变更（基于 A 轮结论）：
+//    - 自研 rppairing→隧道→RSD 注入链路无法在当前环境验证，主界面不再暴露它
+//    - 改为「地图点选 → GCJ→WGS 换算 → 交给 StikDebug」，
+//      每一层都能在本地验证，装上去就能用
 //
-//  和 StikDebug 的本质区别：地图点出来的坐标是 GCJ-02，
-//  注入前必须转成 WGS-84，否则偏 400~700 米。
+//  StikDebug 主程序里确认存在：
+//    simulateLocationWithLatitude:longitude: / CoordinateImportParser /
+//    LocationSimulationView / stikdebug:// URL scheme
+//  它唯一不做的事就是 GCJ→WGS 换算 —— 这正是本 App 补上的。
 //
 
 import SwiftUI
 import MapKit
+import UIKit
 
 struct ContentView: View {
-    @StateObject private var tunnel = TunnelManager()
-
     @State private var camera: MapCameraPosition = .region(
         MKCoordinateRegion(
             center: CLLocationCoordinate2D(latitude: 36.7069, longitude: 119.1618),
@@ -23,22 +24,23 @@ struct ContentView: View {
 
     @State private var picked: CLLocationCoordinate2D?
     @State private var wgsPoint: CLLocationCoordinate2D?
-    @State private var note: String = "在地图上点一下选位置"
-    @State private var showPair: Bool = false
-    @State private var showDiag: Bool = false
-    @State private var busy: Bool = false
+    @State private var note: String = "在地图上点一下，选目标位置"
+    @State private var toast: String = ""
+    @State private var shareURL: URL?
+    @State private var showShare: Bool = false
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                mapArea
-                    .frame(height: 320)
+                mapArea.frame(height: 300)
                 infoList
             }
-            .navigationTitle("定位隧道")
-            .onAppear { tunnel.load() }
-            .sheet(isPresented: $showPair) { PairingView() }
-            .sheet(isPresented: $showDiag) { DiagView(tunnel: tunnel) }
+            .navigationTitle("定位换算")
+            .sheet(isPresented: $showShare) {
+                if let shareURL {
+                    ShareSheet(url: shareURL)
+                }
+            }
         }
     }
 
@@ -51,63 +53,75 @@ struct ContentView: View {
                     Marker("目标", coordinate: p)
                 }
             }
-            .onTapGesture(coordinateSpace: .local) { loc in
-                if let c = proxy.convert(loc, from: .local) {
+            .onTapGesture(coordinateSpace: .local) { location in
+                if let c = proxy.convert(location, from: .local) {
                     applyPick(c)
                 }
             }
         }
     }
 
-    // MARK: - 下方信息
+    // MARK: - 信息
 
     private var infoList: some View {
         List {
-            Section("隧道") {
-                row("状态", tunnelText)
-                Button(tunnel.status == .connected ? "断开隧道" : "连接隧道") {
-                    toggleTunnel()
+            Section("选点结果") {
+                row("地图坐标 GCJ-02", pickedText)
+                row("注入坐标 WGS-84", wgsText, highlight: true)
+                row("换算偏移", note)
+            }
+
+            Section("第 1 步：把正确的坐标送出去（任选一种）") {
+                Button {
+                    copyWGS()
+                } label: {
+                    Label("复制 WGS-84 坐标", systemImage: "doc.on.doc")
                 }
-                Button("配对设备") { showPair = true }
-                Button("自检") { showDiag = true }
+                .disabled(wgsPoint == nil)
+
+                Button {
+                    makeGPX()
+                } label: {
+                    Label("生成 GPX 并分享到 StikDebug", systemImage: "square.and.arrow.up")
+                }
+                .disabled(wgsPoint == nil)
             }
 
-            Section("选点") {
-                row("地图坐标", pickedText)
-                row("注入坐标", wgsText)
-                row("说明", note)
+            Section("第 2 步：打开 StikDebug") {
+                Button {
+                    openStikDebug()
+                } label: {
+                    Label("打开 StikDebug", systemImage: "arrow.up.right.square")
+                }
+                Text("在 Location Simulator 里粘贴刚才复制的坐标，或导入 GPX 文件，然后开始模拟。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
 
-            Section("操作") {
-                Button("注入到手机") { inject() }
-                    .disabled(busy)
-                Button("恢复真实定位") { clearSim() }
-                    .disabled(busy)
+            if toast.isEmpty == false {
+                Section {
+                    Text(toast).font(.footnote).foregroundStyle(.green)
+                }
+            }
+
+            Section("为什么不会偏") {
+                Text("国内地图（高德 / 腾讯 / 苹果中国）用 GCJ-02，定位注入按 WGS-84 解释。"
+                     + "直接把地图上看到的数字填进模拟器会偏 400～700 米。"
+                     + "本 App 在换算后再交给你，落点就是你点的位置。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
         }
     }
 
-    private func row(_ title: String, _ value: String) -> some View {
+    private func row(_ title: String, _ value: String, highlight: Bool = false) -> some View {
         HStack {
-            Text(title)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+            Text(title).font(.footnote).foregroundStyle(.secondary)
             Spacer()
             Text(value)
                 .font(.system(.footnote, design: .monospaced))
+                .foregroundStyle(highlight ? Color.green : Color.primary)
                 .multilineTextAlignment(.trailing)
-        }
-    }
-
-    // MARK: - 状态文本
-
-    private var tunnelText: String {
-        switch tunnel.status {
-        case .connected:    return "已连接"
-        case .connecting:   return "连接中"
-        case .disconnected: return "未连接"
-        case .invalid:      return "未配置"
-        default:            return "其他"
         }
     }
 
@@ -135,64 +149,63 @@ struct ContentView: View {
         wgsPoint = w
         let d = CoordTransform.distance(c, w)
         if d < 1 {
-            note = "境外，无需换算"
+            note = "境外，无需换算（0 米）"
         } else {
-            note = "已换算，偏移 " + String(format: "%.0f", d) + " 米"
+            note = String(format: "已修正约 %.0f 米", d)
+        }
+        toast = ""
+    }
+
+    private func copyWGS() {
+        guard let w = wgsPoint else { return }
+        UIPasteboard.general.string = format(w)
+        toast = "已复制：" + format(w) + "（去 StikDebug 粘贴）"
+    }
+
+    /// 生成 GPX 单航点文件，用系统分享面板送到 StikDebug 的 CoordinateImportParser
+    private func makeGPX() {
+        guard let w = wgsPoint else { return }
+        let lat = String(format: "%.7f", w.latitude)
+        let lng = String(format: "%.7f", w.longitude)
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <gpx version="1.1" creator="XiYO" xmlns="http://www.topografix.com/GPX/1/1">
+          <wpt lat="\(lat)" lon="\(lng)"><name>目标</name></wpt>
+        </gpx>
+        """
+        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let url = dir.appendingPathComponent("target.gpx")
+        do {
+            try xml.write(to: url, atomically: true, encoding: .utf8)
+            shareURL = url
+            showShare = true
+            toast = "GPX 已生成：" + lat + ", " + lng
+        } catch {
+            toast = "生成失败：" + error.localizedDescription
         }
     }
 
-    private func toggleTunnel() {
-        if tunnel.status == .connected {
-            tunnel.stop()
-        } else {
-            tunnel.start()
+    private func openStikDebug() {
+        let candidates = ["stikdebug://", "stikjit://"]
+        for s in candidates {
+            if let u = URL(string: s), UIApplication.shared.canOpenURL(u) {
+                UIApplication.shared.open(u)
+                toast = "已打开 StikDebug"
+                return
+            }
         }
+        toast = "没找到 StikDebug，请从主屏幕打开它"
+    }
+}
+
+// MARK: - 系统分享面板
+
+struct ShareSheet: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: [url], applicationActivities: nil)
     }
 
-    private func inject() {
-        guard let w = wgsPoint else {
-            note = "请先在地图上选点"
-            return
-        }
-        busy = true
-        note = "注入中…"
-        let lat = w.latitude
-        let lng = w.longitude
-        DispatchQueue.global(qos: .userInitiated).async {
-            // 先试直连回环（App 与 lockdownd 同机，理想情况下不需要隧道）
-            let rcLoop = Bridge.simulate(lat: lat, lng: lng, host: "127.0.0.1")
-            var rc = rcLoop
-            var via = "127.0.0.1"
-            if rcLoop != 0 {
-                // 再试隧道内的网关地址
-                rc = Bridge.simulate(lat: lat, lng: lng, host: "10.7.0.1")
-                via = "10.7.0.1"
-            }
-            DispatchQueue.main.async {
-                busy = false
-                if rc == 0 {
-                    note = "已注入(经 " + via + ")"
-                } else if rc == -1 {
-                    note = "注入失败(-1 配对文件不可用)"
-                } else if rc == -2 {
-                    note = "注入失败(-2 连不上 " + via + ")"
-                } else {
-                    note = "注入失败(" + String(rc) + " 经 " + via + ")"
-                }
-            }
-        }
-    }
-
-    private func clearSim() {
-        busy = true
-        note = "恢复中…"
-        DispatchQueue.global(qos: .userInitiated).async {
-            var rc = Bridge.clear(host: "127.0.0.1")
-            if rc != 0 { rc = Bridge.clear(host: "10.7.0.1") }
-            DispatchQueue.main.async {
-                busy = false
-                note = (rc == 0) ? "已恢复真实定位" : ("恢复失败(" + String(rc) + ")")
-            }
-        }
-    }
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }

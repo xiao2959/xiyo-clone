@@ -436,8 +436,17 @@ fn make_provider(pairing_path: &str, host: &str) -> Result<TcpProvider, String> 
 }
 
 // ---------------------------------------------------------------------------
-// 5.5) 配对文件体检：返回 0=可解析；-1=不存在；-2=读失败；-3=不是合法 pairing 文件
-//      并把详情写进 status 字符串
+// 5.5) 配对文件体检（A 轮修正）
+//
+//  旧实现用 PairingFile::read_from_file 去读 iOS 27 的 rppairing 文件，
+//  必然失败 → 误报「格式不对 501B」，并导致注入返回 -1。
+//
+//  新实现按内容区分两种体系（见 docs/A-RSD-ARCHITECTURE.md）：
+//    0  = lockdown 配对文件（可直接注入）
+//    1  = rppairing 配对文件（有效；注入需走 TLS-PSK/CDTunnel/RSD）
+//   -1  = 文件不存在
+//   -2  = 空文件
+//   -3  = 未知格式
 // ---------------------------------------------------------------------------
 #[no_mangle]
 pub extern "C" fn pairing_file_check(path: *const c_char) -> i32 {
@@ -456,13 +465,46 @@ pub extern "C" fn pairing_file_check(path: *const c_char) -> i32 {
     if meta.len() == 0 {
         return -2;
     }
-    match PairingFile::read_from_file(&p) {
-        Ok(_) => {
-            plog("file_check: PairingFile 解析成功");
-            0
-        }
+
+    let bytes = match std::fs::read(&p) {
+        Ok(b) => b,
         Err(e) => {
-            plog(&format!("file_check: PairingFile 解析失败 {e}"));
+            plog(&format!("file_check: 读取失败 {e}"));
+            return -1;
+        }
+    };
+
+    use crate::pairing_kind::{PairingKind, classify_pairing};
+    let kind = classify_pairing(&bytes);
+    match kind {
+        PairingKind::RemotePairing => {
+            // 再用库自己的解析器确认一次，避免只靠头部猜
+            match idevice::remote_pairing::RpPairingFile::from_bytes(&bytes) {
+                Ok(_) => {
+                    plog("file_check: RpPairingFile 解析成功（有效 rppairing 配对）");
+                    1
+                }
+                Err(e) => {
+                    plog(&format!("file_check: 疑似 rppairing 但解析失败 {e}"));
+                    -3
+                }
+            }
+        }
+        PairingKind::Lockdown => {
+            match PairingFile::read_from_file(&p) {
+                Ok(_) => {
+                    plog("file_check: lockdown PairingFile 解析成功");
+                    0
+                }
+                Err(e) => {
+                    plog(&format!("file_check: 疑似 lockdown 但解析失败 {e}"));
+                    -3
+                }
+            }
+        }
+        PairingKind::Missing => -2,
+        PairingKind::Unknown => {
+            plog("file_check: 未知格式");
             -3
         }
     }
