@@ -55,7 +55,7 @@ struct PairingView: View {
                 }
 
                 Section("手机上的操作") {
-                    Text("设置 → 隐私与安全性 → 开发者模式 → 找到本 App → 配对")
+                    Text("设置 → 隐私与安全性 → 开发者模式 → 配对设备下应出现 XiYO-Lab → 点它")
                         .font(.footnote)
                     Text("然后输入上面这 6 位数字，再输入锁屏密码。")
                         .font(.footnote)
@@ -88,7 +88,7 @@ struct PairingView: View {
         status = "正在启动本地配对服务…"
 
         let path = Bridge.pairingPath
-        let port = Bridge.pairingStart(name: "定位隧道", savePath: path)
+        let port = Bridge.pairingStart(name: "XiYO-Lab", savePath: path)
         if port <= 0 {
             running = false
             status = "启动配对服务失败（端口 \(port)）"

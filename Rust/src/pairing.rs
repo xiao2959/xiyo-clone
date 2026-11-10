@@ -149,7 +149,9 @@ pub extern "C" fn pairing_start(name: *const c_char, save_path: *const c_char) -
     }
 
     // 建 listener（同步拿端口，再异步 accept）
-    let listener = match std::net::TcpListener::bind("127.0.0.1:0") {
+    // 关键：必须绑 0.0.0.0。设备通过 Bonjour 解析到的是局域网 IP（192.168.x.x），
+    // 绑 127.0.0.1 会收不到任何连接（这就是"配对没反应"的原因）。
+    let listener = match std::net::TcpListener::bind("0.0.0.0:0") {
         Ok(l) => l,
         Err(_) => return -1,
     };
