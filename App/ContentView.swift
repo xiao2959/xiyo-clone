@@ -36,10 +36,8 @@ enum InjectMode: String, CaseIterable, Identifiable {
 }
 
 struct ContentView: View {
-    @State private var camera: MapCameraPosition = .region(
-        MKCoordinateRegion(
-            center: CLLocationCoordinate2D(latitude: 36.7069, longitude: 119.1618),
-            span: MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02)))
+    /// 只有"主动跳转"才设置它；用户拖地图不会写回，所以不会来回跳
+    @State private var jumpTarget: CLLocationCoordinate2D?
 
     @State private var picked: CLLocationCoordinate2D?
     @State private var injectPoint: CLLocationCoordinate2D?
@@ -97,9 +95,7 @@ struct ContentView: View {
 
     /// 跳到指定坐标并直接把它设为目标（省得跳完还要再点一下地图）
     private func jump(to c: CLLocationCoordinate2D) {
-        camera = .region(MKCoordinateRegion(
-            center: c,
-            span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)))
+        jumpTarget = c
         applyPick(c)
         status = "已跳到 " + format(c)
     }
@@ -111,26 +107,16 @@ struct ContentView: View {
             status = "还没拿到定位，稍等再点一次"
             return
         }
-        camera = .region(MKCoordinateRegion(
-            center: c,
-            span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)))
-        status = "已回到当前位置"
+        // 回到当前位置只移动地图，不覆盖已选的目标点
+        jumpTarget = c
+        status = "已回到当前位置（目标点保留）"
     }
 
-    // MARK: - 地图
+    // MARK: - 地图（原生 MKMapView，不来回跳）
 
     private var mapArea: some View {
-        MapReader { proxy in
-            Map(position: $camera) {
-                if let p = picked {
-                    Marker("目标", coordinate: p)
-                }
-            }
-            .onTapGesture(coordinateSpace: .local) { location in
-                if let c = proxy.convert(location, from: .local) {
-                    applyPick(c)
-                }
-            }
+        NativeMapView(center: jumpTarget, picked: picked) { c in
+            applyPick(c)
         }
     }
 

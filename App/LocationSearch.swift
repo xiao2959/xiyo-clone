@@ -46,14 +46,28 @@ final class SearchModel: NSObject, ObservableObject, MKLocalSearchCompleterDeleg
     }
 
     /// 把搜索建议解析成真实坐标
+    ///
+    /// ⚠️ 之前用 title+", "+subtitle 拼成自然语言查询，会把结果带偏
+    ///    （例如搜"潍坊学院"却落到别的区）。
+    ///    改用 MKLocalSearch.Request(completion:) —— 苹果官方的"补全→精确定位"接口，
+    ///    拿到的是这一条补全对应的坐标，不会串。
     func resolve(_ c: MKLocalSearchCompletion, done: @escaping (CLLocationCoordinate2D?) -> Void) {
-        let req = MKLocalSearch.Request()
-        // 用自然语言查询，兼容所有 iOS 版本；带上 subtitle 提高命中率
-        req.naturalLanguageQuery = c.subtitle.isEmpty ? c.title : (c.title + ", " + c.subtitle)
-        req.region = completer.region
-        MKLocalSearch(request: req).start { response, _ in
+        let req: MKLocalSearch.Request
+        if #available(iOS 17.0, *) {
+            // iOS 17 起支持直接用补全构造 Request（本项目最低 17.0，恒走这里）
+            req = MKLocalSearch.Request(completion: c)
+        } else {
+            req = MKLocalSearch.Request()
+            req.naturalLanguageQuery = c.title
+        }
+        // 用补全自带的 region 结果更稳，不强行指定全国大区
+        MKLocalSearch(request: req).start { response, error in
             DispatchQueue.main.async {
-                done(response?.mapItems.first?.placemark.coordinate)
+                if let item = response?.mapItems.first {
+                    done(item.placemark.coordinate)
+                } else {
+                    done(nil)
+                }
             }
         }
     }
