@@ -9,6 +9,7 @@
 //
 
 import SwiftUI
+import CoreLocation
 import UniformTypeIdentifiers
 
 struct DirectInjectView: View {
