@@ -48,6 +48,14 @@ struct ContentView: View {
     @State private var stikInstalled: Bool = false
     @State private var showModeHelp: Bool = false
 
+    // 找地方：搜索 / 手动输经纬度
+    @StateObject private var search = SearchModel()
+    @State private var showSearch: Bool = false
+    @State private var coordText: String = ""
+    @State private var showCoordInput: Bool = false
+    @State private var locating: Bool = false
+    private let locator = CLLocationManager()
+
     @AppStorage("inject_mode") private var modeRaw: String = InjectMode.autoGCJ.rawValue
 
     private var mode: InjectMode {
@@ -61,8 +69,52 @@ struct ContentView: View {
                 infoList
             }
             .navigationTitle("定位注入")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showSearch = true
+                    } label: {
+                        Image(systemName: "magnifyingglass")
+                    }
+                }
+            }
             .onAppear { stikInstalled = checkStik() }
+            .sheet(isPresented: $showSearch) {
+                SearchSheet(search: search) { c in
+                    jump(to: c)
+                }
+            }
+            .alert("输入经纬度", isPresented: $showCoordInput) {
+                TextField("36.7069, 119.1618", text: $coordText)
+                Button("跳转") {
+                    if let c = CoordInput.parse(coordText) { jump(to: c) }
+                    else { status = "坐标格式不对，要：纬度, 经度" }
+                }
+                Button("取消", role: .cancel) {}
+            }
         }
+    }
+
+    /// 跳到指定坐标并直接把它设为目标（省得跳完还要再点一下地图）
+    private func jump(to c: CLLocationCoordinate2D) {
+        camera = .region(MKCoordinateRegion(
+            center: c,
+            span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)))
+        applyPick(c)
+        status = "已跳到 " + format(c)
+    }
+
+    /// 回到当前真实位置
+    private func goCurrent() {
+        locator.requestWhenInUseAuthorization()
+        guard let c = locator.location?.coordinate else {
+            status = "还没拿到定位，稍等再点一次"
+            return
+        }
+        camera = .region(MKCoordinateRegion(
+            center: c,
+            span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)))
+        status = "已回到当前位置"
     }
 
     // MARK: - 地图
@@ -86,6 +138,28 @@ struct ContentView: View {
 
     private var infoList: some View {
         List {
+            Section("找地方") {
+                Button {
+                    showSearch = true
+                } label: {
+                    Label("搜索地名 / 小区 / 学校", systemImage: "magnifyingglass")
+                }
+                Button {
+                    coordText = ""
+                    showCoordInput = true
+                } label: {
+                    Label("输入经纬度跳转", systemImage: "number")
+                }
+                Button {
+                    goCurrent()
+                } label: {
+                    Label("回到当前位置", systemImage: "location")
+                }
+                Text("搜到后自动跳过去并放好目标点，不用手动拖地图。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("选点") {
                 row("地图坐标", pickedText)
                 row("实际注入", injectText, highlight: true)
