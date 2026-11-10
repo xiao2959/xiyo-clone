@@ -16,7 +16,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: macos-13   # Intel：arm64 runner 排队更久（日志里有官方提示）
     timeout-minutes: 40
 
     steps:
