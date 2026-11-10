@@ -159,17 +159,25 @@ struct ContentView: View {
         let lat = w.latitude
         let lng = w.longitude
         DispatchQueue.global(qos: .userInitiated).async {
-            let rc = Bridge.simulate(lat: lat, lng: lng)
+            // 先试直连回环（App 与 lockdownd 同机，理想情况下不需要隧道）
+            let rcLoop = Bridge.simulate(lat: lat, lng: lng, host: "127.0.0.1")
+            var rc = rcLoop
+            var via = "127.0.0.1"
+            if rcLoop != 0 {
+                // 再试隧道内的网关地址
+                rc = Bridge.simulate(lat: lat, lng: lng, host: "10.7.0.1")
+                via = "10.7.0.1"
+            }
             DispatchQueue.main.async {
                 busy = false
                 if rc == 0 {
-                    note = "已注入"
+                    note = "已注入(经 " + via + ")"
                 } else if rc == -1 {
                     note = "注入失败(-1 配对文件不可用)"
                 } else if rc == -2 {
-                    note = "注入失败(-2 连不上 10.7.0.1)"
+                    note = "注入失败(-2 连不上 " + via + ")"
                 } else {
-                    note = "注入失败(" + String(rc) + ")"
+                    note = "注入失败(" + String(rc) + " 经 " + via + ")"
                 }
             }
         }
@@ -179,7 +187,8 @@ struct ContentView: View {
         busy = true
         note = "恢复中…"
         DispatchQueue.global(qos: .userInitiated).async {
-            let rc = Bridge.clear()
+            var rc = Bridge.clear(host: "127.0.0.1")
+            if rc != 0 { rc = Bridge.clear(host: "10.7.0.1") }
             DispatchQueue.main.async {
                 busy = false
                 note = (rc == 0) ? "已恢复真实定位" : ("恢复失败(" + String(rc) + ")")

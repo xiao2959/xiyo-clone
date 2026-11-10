@@ -19,6 +19,7 @@ struct DiagView: View {
     @State private var kindText: String = "-"
     @State private var idText: String = "-"
     @State private var errText: String = "-"
+    @State private var headText: String = "-"
     @State private var running: Bool = false
 
     var body: some View {
@@ -31,6 +32,7 @@ struct DiagView: View {
                     row("扩展响应", extText)
                     row("配对文件", pairText)
                     row("10.7.0.1:62078", portText)
+                    row("配对文件头", headText)
                     row("错误", errText)
                 }
                 Section {
@@ -72,11 +74,13 @@ struct DiagView: View {
         extText = "..."
         portText = "..."
         errText = tunnel.lastError ?? "-"
+        headText = pairFileHead()
 
         tunnel.send("ping") { reply in
             DispatchQueue.main.async {
                 extText = (reply == "pong") ? "OK" : ("无响应[" + (reply ?? "nil") + "]")
                 errText = tunnel.lastError ?? "-"
+        headText = pairFileHead()
             }
         }
 
@@ -104,6 +108,22 @@ struct DiagView: View {
         if rc == -2 { tag = "空文件" }
         if rc == -3 { tag = "格式不对" }
         return tag + " " + String(size) + "B"
+    }
+
+    /// 读配对文件前 16 字节，判断它到底是什么东西
+    private func pairFileHead() -> String {
+        let path = Bridge.pairingPath
+        guard let fh = FileHandle(forReadingAtPath: path) else { return "打不开" }
+        let data = fh.readData(ofLength: 16)
+        fh.closeFile()
+        if data.isEmpty { return "空" }
+        var hex = ""
+        var ascii = ""
+        for b in data {
+            hex += String(format: "%02x", b)
+            ascii += (b >= 32 && b < 127) ? String(UnicodeScalar(b)) : "."
+        }
+        return ascii + " | " + hex
     }
 
     private func rebuild() {
