@@ -46,6 +46,13 @@ struct ContentView: View {
     @State private var stikInstalled: Bool = false
     @State private var showModeHelp: Bool = false
 
+    // 注入结果（中文常驻显示 + 返回时确认）
+    @State private var lastResultOK: Bool?
+    @State private var lastResultText: String = ""
+    @State private var showResultSheet: Bool = false
+    @State private var pendingCoordText: String = ""
+    @State private var wasInBackground: Bool = false
+
     // 找地方：搜索 / 手动输经纬度
     @StateObject private var search = SearchModel()
     @State private var showSearch: Bool = false
@@ -77,6 +84,26 @@ struct ContentView: View {
                 }
             }
             .onAppear { stikInstalled = checkStik() }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+                // 只有"刚注入过、还没确认结果"才需要在回来时问
+                if pendingCoordText.isEmpty == false { wasInBackground = true }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+                if wasInBackground && pendingCoordText.isEmpty == false {
+                    wasInBackground = false
+                    // 稍等，让 StikDebug 的弹窗先消失
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                        showResultSheet = true
+                    }
+                }
+            }
+            .sheet(isPresented: $showResultSheet) {
+                ResultSheet(coord: pendingCoordText) { ok in
+                    lastResultOK = ok
+                    lastResultText = ok ? "模拟成功" : "模拟失败"
+                    pendingCoordText = ""
+                }
+            }
             .sheet(isPresented: $showSearch) {
                 SearchSheet(search: search) { c in
                     jump(to: c)
@@ -124,6 +151,32 @@ struct ContentView: View {
 
     private var infoList: some View {
         List {
+            // 中文结果常驻显示：一眼分辨成功/失败
+            Section("本次结果") {
+                HStack {
+                    Text(resultHeadline)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(resultColor)
+                    Spacer()
+                    if lastResultOK != nil {
+                        Button("清除") {
+                            lastResultOK = nil
+                            lastResultText = ""
+                        }
+                        .font(.footnote)
+                    }
+                }
+                if lastResultText.isEmpty == false {
+                    Text(lastResultText + " · " + injectText)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("点「注入到手机」后会跳到 StikDebug 确认，回来这里标记结果。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             Section("找地方") {
                 Button {
                     showSearch = true
@@ -212,16 +265,15 @@ struct ContentView: View {
                 }
             }
 
-            Section("关于弹窗") {
-                Text("点「注入」后 StikDebug 会弹一次 Simulate Location?，"
-                     + "点 Set Location 确认即可。这是它自己的安全确认，正常现象。")
-                    .font(.footnote)
-                Text("⚠️ 如果弹的是 Clear Location?（清除位置），不要点，"
-                     + "点左上角返回或关掉。清除了就会回到真实定位。")
+            Section("StikDebug 弹窗对照（英文 → 中文）") {
+                row("Simulate Location?", "= 要模拟位置吗 → 点 Set Location ✅")
+                row("Clear Location?", "= 要清除位置吗 → 不要点 ⚠️")
+                row("设备已连接", "= 配对正常，可以注入 ✅")
+                row("Pairing File Required", "= 缺配对文件，去 StikDebug 导入 ⚠️")
+                row("Simulation Failed", "= 注入失败，检查设备连接 ⚠️")
+                Text("它是第三方 App，弹窗文字改不了；所以本 App 用中文「本次结果」栏让你标记成功/失败。")
                     .font(.footnote)
                     .foregroundStyle(.orange)
-                Text("每次换位置只需点一次「注入到手机」，等它弹 Simulate Location? 再确认。")
-                    .font(.footnote)
             }
 
             Section("原理") {
@@ -257,6 +309,16 @@ struct ContentView: View {
 
     private func format(_ c: CLLocationCoordinate2D) -> String {
         String(format: "%.7f, %.7f", c.latitude, c.longitude)
+    }
+
+    private var resultHeadline: String {
+        guard let ok = lastResultOK else { return "尚未注入" }
+        return ok ? "✅ 模拟成功" : "❌ 模拟失败"
+    }
+
+    private var resultColor: Color {
+        guard let ok = lastResultOK else { return .secondary }
+        return ok ? .green : .red
     }
 
     // MARK: - 逻辑
@@ -305,7 +367,9 @@ struct ContentView: View {
         UIApplication.shared.open(u) { ok in
             DispatchQueue.main.async {
                 if ok {
-                    status = "已发送：" + lat + ", " + lon + "（在 StikDebug 里点 Set Location 确认）"
+                    pendingCoordText = lat + ", " + lon
+                    wasInBackground = false
+                    status = "已发送：" + lat + ", " + lon
                 } else {
                     status = "打开 StikDebug 失败，请确认已安装"
                 }
