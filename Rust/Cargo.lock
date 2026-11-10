@@ -716,6 +716,7 @@ name = "idevice_ffi"
 version = "0.3.0"
 dependencies = [
  "idevice",
+ "plist",
  "serde_json",
  "tokio",
 ]

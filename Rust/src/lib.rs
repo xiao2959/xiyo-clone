@@ -12,3 +12,4 @@
 pub mod pairing;
 pub mod pairing_kind;
 pub mod inject;
+pub mod coredevice_location;
