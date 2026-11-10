@@ -177,6 +177,47 @@ async fn connect_to_device_port(host: &str, port: u16) -> Result<TcpStream, Stri
     }
 }
 
+/// 一次完整的 rppairing 握手：连接 → pair-verify → 让设备开监听
+///
+/// `host_role = true`  → `originatedBy: "host"`（我方主动连设备）
+/// `host_role = false` → `originatedBy: "device"`（角色翻转的备选）
+///
+/// 返回 (设备开的监听端口, TLS-PSK 密钥)
+async fn remote_pair_handshake(
+    host: &str,
+    port: u16,
+    pairing_path: &str,
+    host_role: bool,
+) -> Result<(u16, Vec<u8>), String> {
+    let mut pf = RpPairingFile::read_from_file(pairing_path)
+        .await
+        .map_err(|e| format!("读 rppairing 失败: {e}"))?;
+
+    let stream = connect_to_device_port(host, port)
+        .await
+        .map_err(|e| format!("连 _remotepairing._tcp({port}) 失败: {e}"))?;
+
+    let sock = if host_role {
+        RpPairingSocket::new(stream)
+    } else {
+        RpPairingSocket::new_device(stream)
+    };
+    let mut client = RemotePairingClient::new(sock, "xiyo-lab");
+    client.connect(&mut pf, || async { String::new() }).await.map_err(|e| {
+        format!(
+            "pair-verify 失败({} 角色): {e}",
+            if host_role { "host" } else { "device" }
+        )
+    })?;
+
+    let listener_port = client
+        .create_tcp_listener()
+        .await
+        .map_err(|e| format!("create_tcp_listener 失败: {e}"))?;
+    let key = client.encryption_key().to_vec();
+    Ok((listener_port, key))
+}
+
 /// 打开完整隧道到 RSD
 ///
 /// - `host`：设备地址（本机上通常是 127.0.0.1）
@@ -187,12 +228,7 @@ pub async fn open_tunnel(
     rp_port: u16,
     pairing_path: &str,
 ) -> Result<OpenTunnel, String> {
-    // 1) 读配对文件
-    let mut pf = RpPairingFile::read_from_file(pairing_path)
-        .await
-        .map_err(|e| format!("读 rppairing 失败: {e}"))?;
-
-    // 2) 找 remotepairing 端口
+    // 1) 找 remotepairing 端口
     let port = if rp_port == 0 {
         probe_rp_port(host)
             .await
@@ -201,28 +237,20 @@ pub async fn open_tunnel(
         rp_port
     };
 
-    // 3) 连接 + pair-verify（用已有配对，不需要 PIN）
-    let stream = connect_to_device_port(host, port)
-        .await
-        .map_err(|e| format!("连 _remotepairing._tcp({port}) 失败: {e}"))?;
-
-    // ⚠️ 角色必须用 new()（originatedBy: "host"）：
-    //    建隧道是「我方主动连设备」，我们是 initiating host。
-    //    用 new_device()（originatedBy: "device"）是设备主动连入配对的场景，
-    //    在这里会被设备直接拒绝 → pair-verify 报 "device socket io failed"。
-    let sock = RpPairingSocket::new(stream);
-    let mut client = RemotePairingClient::new(sock, "xiyo-lab");
-    client
-        .connect(&mut pf, || async { String::new() })
-        .await
-        .map_err(|e| format!("pair-verify 失败: {e}"))?;
-
-    // 4) 让设备开一个 TCP 监听
-    let listener_port = client
-        .create_tcp_listener()
-        .await
-        .map_err(|e| format!("create_tcp_listener 失败: {e}"))?;
-    let key = client.encryption_key().to_vec();
+    // 2) 连接 + pair-verify + 开监听 —— 角色自动回退
+    //
+    //    originatedBy 到底该发 "host" 还是 "device"，库里的注释两处方向不同，
+    //    与其猜，不如两个都试：先按「我方主动连设备 = host」，
+    //    失败再翻转成 "device"。哪个成功，错误信息里会带出来。
+    let (listener_port, key) = match remote_pair_handshake(host, port, pairing_path, true).await {
+        Ok(v) => v,
+        Err(e_host) => {
+            eprintln!("[tunnel] host 角色失败({e_host})，改用 device 角色重试");
+            remote_pair_handshake(host, port, pairing_path, false)
+                .await
+                .map_err(|e_dev| format!("两种角色都失败 —— host: {e_host} ／ device: {e_dev}"))?
+        }
+    };
 
     // 5) 连到那个监听端口
     let lstream = connect_to_device_port(host, listener_port)
