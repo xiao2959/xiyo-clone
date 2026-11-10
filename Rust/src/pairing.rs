@@ -136,12 +136,32 @@ fn rt() -> &'static tokio::runtime::Runtime {
     })
 }
 
+/// 把 panic 拦在 FFI 边界内 —— 否则整个 App 会被系统杀掉（用户只看到闪退）。
+///
+/// `panic = "unwind"`（Cargo.toml）+ catch_unwind 才能生效。
+fn guard<T, F: FnOnce() -> T>(fallback: T, f: F) -> T {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(v) => v,
+        Err(e) => {
+            let msg = if let Some(s) = e.downcast_ref::<&str>() {
+                (*s).to_string()
+            } else if let Some(s) = e.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unknown panic".to_string()
+            };
+            plog(&format!("PANIC 被拦截: {msg}"));
+            eprintln!("[pairing] PANIC: {msg}");
+            fallback
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 1) 启动配对：开 listener，后台等设备连入
 //    返回监听端口（>0）或 -1
 // ---------------------------------------------------------------------------
-#[no_mangle]
-pub extern "C" fn pairing_start(name: *const c_char, save_path: *const c_char) -> i32 {
+fn pairing_start_inner(name: *const c_char, save_path: *const c_char) -> i32 {
     let host_name = cstr(name);
     let save = cstr(save_path);
     if host_name.is_empty() || save.is_empty() {
@@ -280,6 +300,12 @@ fn finish(r: Result<(), String>) {
     }
 }
 
+/// 对外入口（带 panic 拦截）
+#[no_mangle]
+pub extern "C" fn pairing_start(name: *const c_char, save_path: *const c_char) -> i32 {
+    guard(-1, || pairing_start_inner(name, save_path))
+}
+
 // ---------------------------------------------------------------------------
 // 2) 取 6 位码（Swift 轮询）
 //    返回值：>0 = 长度（已写入 buf）；0 = 还没有；-1 = 出错
@@ -308,6 +334,10 @@ pub extern "C" fn pairing_take_pin(buf: *mut c_char, cap: i32) -> i32 {
 // ---------------------------------------------------------------------------
 #[no_mangle]
 pub extern "C" fn pairing_wait(timeout_ms: i32) -> i32 {
+    guard(-2, || pairing_wait_inner(timeout_ms))
+}
+
+fn pairing_wait_inner(timeout_ms: i32) -> i32 {
     let rx = {
         let mut s = state().lock().unwrap();
         s.rx.take()

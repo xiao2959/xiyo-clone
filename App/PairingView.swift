@@ -24,7 +24,7 @@ struct PairingView: View {
     @State private var elapsed: Int = 0
     @State private var showPicker: Bool = false
 
-    private let service = BonjourPublisher()
+    private let service = BonjourPublisher.shared
     @State private var timer: Timer?
     @State private var bgTask: UIBackgroundTaskIdentifier = .invalid
 
@@ -238,7 +238,12 @@ struct DocumentPicker: UIViewControllerRepresentable {
 
 // MARK: - Bonjour 发布
 
+/// 必须是单例：SwiftUI 的 View 是值类型，每次 body 求值都会重建，
+/// 若把 publisher 放成 View 的属性，NetService 的 delegate 会指向已释放的对象。
 final class BonjourPublisher: NSObject, NetServiceDelegate {
+
+    static let shared = BonjourPublisher()
+
     private var netService: NetService?
 
     func publish(port: UInt16) {
@@ -252,8 +257,8 @@ final class BonjourPublisher: NSObject, NetServiceDelegate {
         let n = Bridge.pairingIdentifier(into: &nameBuf)
         let x = Bridge.pairingTXT(into: &txtBuf)
 
-        let type = t ?? "_remotepairing-pairable-host._tcp."
-        let name = n ?? "lab"
+        let type = (t?.isEmpty == false) ? t! : "_remotepairing-pairable-host._tcp."
+        let name = (n?.isEmpty == false) ? n! : "XiYO-Lab"
         let txtString = x ?? ""
 
         var txt: [String: Data] = [:]
@@ -262,13 +267,21 @@ final class BonjourPublisher: NSObject, NetServiceDelegate {
             if parts.count == 2 { txt[parts[0]] = Data(parts[1].utf8) }
         }
 
-        let svc = NetService(domain: "local.", type: type, name: name, port: Int32(port))
-        if txt.isEmpty == false {
-            svc.setTXTRecord(NetService.data(fromTXTRecord: txt))
+        // NetService 必须在有 runloop 的线程上发布，否则回调不来
+        let work = {
+            let svc = NetService(domain: "local.", type: type, name: name, port: Int32(port))
+            if txt.isEmpty == false {
+                svc.setTXTRecord(NetService.data(fromTXTRecord: txt))
+            }
+            svc.delegate = self
+            svc.publish()
+            self.netService = svc
         }
-        svc.delegate = self
-        svc.publish()
-        netService = svc
+        if Thread.isMainThread {
+            work()
+        } else {
+            DispatchQueue.main.async(execute: work)
+        }
     }
 
     func stop() {

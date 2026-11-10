@@ -35,4 +35,6 @@ name = "idevice_ffi"
 [profile.release]
 lto = true
 opt-level = "z"
-panic = "abort"
+# ⚠️ 不能用 abort：FFI 里一旦 panic 会直接把整个 App 杀掉（用户只看到闪退）。
+# 改成 unwind + 各导出函数外层 catch_unwind，panic 会变成返回错误码。
+panic = "unwind"

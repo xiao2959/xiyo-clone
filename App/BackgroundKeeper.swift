@@ -6,19 +6,42 @@
 //  这一步必然把我们的 App 切到后台。iOS 会很快挂起进程，
 //  TCP 连接一断，SRP 握手就停在半路 —— 表现就是"输完密码没反应"。
 //
-//  做法：用「持续定位」保持后台运行。Info.plist 已有
-//  UIBackgroundModes = location，所以这是被系统允许的正规方式。
+//  ⚠️ 两个会直接闪退的坑（已修）：
+//    1. allowsBackgroundLocationUpdates = true
+//       必须在 Info.plist 里声明 UIBackgroundModes 含 location，
+//       否则 iOS 直接抛 NSInternalInconsistencyException。
+//    2. requestAlwaysAuthorization()
+//       必须有 NSLocationAlwaysAndWhenInUseUsageDescription，
+//       否则同样会抛异常。
+//  现在两个都先检查再调用，缺了就安静降级，不再崩。
 //
 
 import Foundation
 import CoreLocation
+import os.log
 
 final class BackgroundKeeper: NSObject, CLLocationManagerDelegate {
 
     static let shared = BackgroundKeeper()
 
+    private let log = Logger(subsystem: "com.lab.xiyoclone", category: "keeper")
     private let manager = CLLocationManager()
     private var running = false
+
+    /// Info.plist 是否声明了 location 后台模式
+    private var hasLocationBackgroundMode: Bool {
+        guard let modes = Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String]
+        else { return false }
+        return modes.contains("location")
+    }
+
+    /// Info.plist 是否有「始终允许」的说明字符串
+    private var hasAlwaysUsageString: Bool {
+        guard let s = Bundle.main
+            .object(forInfoDictionaryKey: "NSLocationAlwaysAndWhenInUseUsageDescription") as? String
+        else { return false }
+        return s.isEmpty == false
+    }
 
     /// 开始保活
     func start() {
@@ -26,16 +49,23 @@ final class BackgroundKeeper: NSObject, CLLocationManagerDelegate {
             self.manager.delegate = self
             self.manager.desiredAccuracy = kCLLocationAccuracyThreeKilometers
             self.manager.distanceFilter = 500
-
-            // 关键：允许后台定位更新
-            if #available(iOS 9.0, *) {
-                self.manager.allowsBackgroundLocationUpdates = true
-            }
             self.manager.pausesLocationUpdatesAutomatically = false
 
+            // 坑 1：没有 location 后台模式就别设，否则崩
+            if self.hasLocationBackgroundMode {
+                self.manager.allowsBackgroundLocationUpdates = true
+            } else {
+                self.log.info("Info.plist 缺 UIBackgroundModes=location，跳过后台定位设置")
+            }
+
+            // 坑 2：没有「始终允许」说明字符串就别请求，否则崩
             let status = self.manager.authorizationStatus
             if status == .notDetermined {
-                self.manager.requestAlwaysAuthorization()
+                if self.hasAlwaysUsageString {
+                    self.manager.requestAlwaysAuthorization()
+                } else {
+                    self.manager.requestWhenInUseAuthorization()
+                }
             }
 
             self.manager.startUpdatingLocation()
@@ -48,7 +78,7 @@ final class BackgroundKeeper: NSObject, CLLocationManagerDelegate {
         DispatchQueue.main.async {
             guard self.running else { return }
             self.manager.stopUpdatingLocation()
-            if #available(iOS 9.0, *) {
+            if self.hasLocationBackgroundMode {
                 self.manager.allowsBackgroundLocationUpdates = false
             }
             self.running = false
@@ -66,6 +96,6 @@ final class BackgroundKeeper: NSObject, CLLocationManagerDelegate {
     }
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        // 用户授权后自动继续（startUpdatingLocation 已在 start() 里调用）
+        // 用户授权后继续
     }
 }
