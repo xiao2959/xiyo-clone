@@ -42,8 +42,21 @@ struct NativeMapView: UIViewRepresentable {
             animated: false)
         context.coordinator.lastCenter = initial
 
+        // ★ 对齐官方版：用「长按」选点，不用单击。
+        //   官方二进制里有 24 处 LongPress + 文案「长按地图选择位置」。
+        //   单击会被 MKMapView 识别为"可能开始平移"，与 pin 更新互相打架，
+        //   表现就是"点一下位置跳一下"。长按不会触发地图手势冲突。
+        let longPress = UILongPressGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleLongPress(_:)))
+        longPress.minimumPressDuration = 0.35
+        longPress.allowableMovement = 8
+        map.addGestureRecognizer(longPress)
+
+        // 同时保留单击：官方只要长按，但用户习惯点一下，两者都接不影响
         let tap = UITapGestureRecognizer(target: context.coordinator,
                                          action: #selector(Coordinator.handleTap(_:)))
+        tap.require(toFail: longPress)   // 优先判长按，避免一次操作触发两次
         map.addGestureRecognizer(tap)
         return map
     }
@@ -96,6 +109,16 @@ struct NativeMapView: UIViewRepresentable {
 
         @objc func handleTap(_ g: UITapGestureRecognizer) {
             guard let map = g.view as? MKMapView else { return }
+            let point = g.location(in: map)
+            let coord = map.convert(point, toCoordinateFrom: map)
+            onPick(coord)
+        }
+
+        /// 长按选点（官方版的方式）：按下即选，位置即时反馈，不会"跳"
+        @objc func handleLongPress(_ g: UILongPressGestureRecognizer) {
+            guard let map = g.view as? MKMapView else { return }
+            // 只在长按开始（Began）时选一次，Changed 期间手指微动不重复选
+            guard g.state == .began else { return }
             let point = g.location(in: map)
             let coord = map.convert(point, toCoordinateFrom: map)
             onPick(coord)

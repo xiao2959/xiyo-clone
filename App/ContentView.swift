@@ -200,9 +200,12 @@ struct ContentView: View {
             }
 
             Section("选点") {
-                row("地图坐标", pickedText)
-                row("实际注入", injectText, highlight: true)
+                row("地图坐标 GCJ-02", pickedText)
+                row("注入坐标 WGS-84", injectText, highlight: true)
                 row("说明", note)
+                Text("💡 长按地图选位置（和官方版一致），也可以单击。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
 
             Section {
