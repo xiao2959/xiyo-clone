@@ -1,20 +1,39 @@
 //
-//  ContentView.swift —— 一体化版（C 轮）
+//  ContentView.swift —— 一键注入 + 坐标模式校准（D 轮）
 //
-//  关键突破：StikDebug 3.2.2 支持深链直接注入坐标（从二进制中确认）：
-//      stikdebug://simulate-location?lat=37.3349&lon=-122.0090
-//      stikdebug://clear-location
-//      stikdebug://stop-location
+//  用户反馈：注入后仍偏几百米。
+//  原因待定：苹果地图在中国区可能是 GCJ-02 也可能是 WGS-84，
+//            StikDebug 深链不换算、直接把 lat/lon 传给注入接口。
+//            两种可能方向相反，猜错就反向偏 ~500 米。
 //
-//  所以不需要用户手动开第二个 App、手动粘贴：
-//      本 App 地图点选 → GCJ→WGS 换算 → 调深链 → StikDebug 收到坐标直接注入
+//  解决：给用户三个模式，一次测准并记住选择。
+//    ① 自动换算 GCJ→WGS（默认）
+//    ② 原样注入（MapKit 若已是 WGS 就选这个）
+//    ③ 反向换算 WGS→GCJ
 //
-//  用户视角：点地图 → 点「注入」→ 完成。
+//  用户视角：地图点选 → 点「注入」→ 完成；偏了就切一下模式。
 //
 
 import SwiftUI
 import MapKit
 import UIKit
+
+/// 注入坐标的模式。选对一次，以后一直对。
+enum InjectMode: String, CaseIterable, Identifiable {
+    case autoGCJ = "自动换算 GCJ→WGS"
+    case raw     = "原样注入（不换算）"
+    case reverse = "反向换算 WGS→GCJ"
+
+    var id: String { rawValue }
+
+    var hint: String {
+        switch self {
+        case .autoGCJ: return "地图点是 GCJ-02 时用（默认）"
+        case .raw:     return "地图点本来就是 WGS-84 时用"
+        case .reverse: return "前两种都往反方向偏时用"
+        }
+    }
+}
 
 struct ContentView: View {
     @State private var camera: MapCameraPosition = .region(
@@ -23,10 +42,17 @@ struct ContentView: View {
             span: MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02)))
 
     @State private var picked: CLLocationCoordinate2D?
-    @State private var wgsPoint: CLLocationCoordinate2D?
+    @State private var injectPoint: CLLocationCoordinate2D?
     @State private var note: String = "在地图上点一下，选目标位置"
     @State private var status: String = ""
     @State private var stikInstalled: Bool = false
+    @State private var showModeHelp: Bool = false
+
+    @AppStorage("inject_mode") private var modeRaw: String = InjectMode.autoGCJ.rawValue
+
+    private var mode: InjectMode {
+        InjectMode(rawValue: modeRaw) ?? .autoGCJ
+    }
 
     var body: some View {
         NavigationStack {
@@ -62,7 +88,7 @@ struct ContentView: View {
         List {
             Section("选点") {
                 row("地图坐标", pickedText)
-                row("注入坐标", wgsText, highlight: true)
+                row("实际注入", injectText, highlight: true)
                 row("说明", note)
             }
 
@@ -75,7 +101,7 @@ struct ContentView: View {
                         Text("注入到手机").fontWeight(.semibold)
                     }
                 }
-                .disabled(wgsPoint == nil)
+                .disabled(injectPoint == nil)
 
                 Button {
                     sendClear()
@@ -85,6 +111,34 @@ struct ContentView: View {
             } footer: {
                 if status.isEmpty == false {
                     Text(status).font(.footnote)
+                }
+            }
+
+            Section("坐标模式（偏了就换一个试试）") {
+                Picker("坐标模式", selection: $modeRaw) {
+                    ForEach(InjectMode.allCases) { m in
+                        Text(m.rawValue).tag(m.rawValue)
+                    }
+                }
+                .pickerStyle(.inline)
+                .onChange(of: modeRaw) { _ in
+                    if let p = picked { applyPick(p) }
+                }
+
+                Text(mode.hint).font(.footnote).foregroundStyle(.secondary)
+
+                Button("怎么选？点我看一句话说明") {
+                    showModeHelp.toggle()
+                }
+                .font(.footnote)
+
+                if showModeHelp {
+                    Text("点一个明显地标 → 注入 → 看手机地图蓝点。\n"
+                         + "蓝点在目标西边/南边约 500 米 → 切「原样注入」。\n"
+                         + "蓝点往反方向偏 → 切「反向换算」。\n"
+                         + "选对一次会自动记住，以后不用再改。")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
                 }
             }
 
@@ -99,9 +153,9 @@ struct ContentView: View {
             }
 
             Section("原理") {
-                Text("国内地图用 GCJ-02，注入按 WGS-84 解释。"
-                     + "直接把地图坐标注入会偏 400～700 米。"
-                     + "本 App 先换算再通过 StikDebug 的深链接口注入。")
+                Text("StikDebug 的深链接口不换算坐标，收到什么就注入什么。"
+                     + "国内地图与 GPS 坐标系不同，差 400～700 米。"
+                     + "本 App 负责把坐标转成不偏的那个值。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -124,9 +178,9 @@ struct ContentView: View {
         return format(p)
     }
 
-    private var wgsText: String {
-        guard let w = wgsPoint else { return "未选" }
-        return format(w)
+    private var injectText: String {
+        guard let p = injectPoint else { return "未选" }
+        return format(p)
     }
 
     private func format(_ c: CLLocationCoordinate2D) -> String {
@@ -137,41 +191,44 @@ struct ContentView: View {
 
     private func applyPick(_ c: CLLocationCoordinate2D) {
         picked = c
-        let w = CoordTransform.gcj2wgs(c.latitude, c.longitude)
-        wgsPoint = w
-        let d = CoordTransform.distance(c, w)
+        let out: CLLocationCoordinate2D
+        switch mode {
+        case .autoGCJ:
+            out = CoordTransform.gcj2wgs(c.latitude, c.longitude)
+        case .raw:
+            out = c
+        case .reverse:
+            out = CoordTransform.wgs2gcj(c.latitude, c.longitude)
+        }
+        injectPoint = out
+        let d = CoordTransform.distance(c, out)
         if d < 1 {
-            note = "境外，无需换算（0 米）"
+            note = "原样注入（偏移 0 米）"
         } else {
-            note = String(format: "已修正约 %.0f 米", d)
+            note = String(format: "%@，偏移 %.0f 米", mode.rawValue, d)
         }
         status = ""
     }
 
     private func checkStik() -> Bool {
-        if let u = URL(string: "stikdebug://"), UIApplication.shared.canOpenURL(u) {
-            return true
-        }
-        return false
+        guard let u = URL(string: "stikdebug://") else { return false }
+        return UIApplication.shared.canOpenURL(u)
     }
 
-    /// 调 StikDebug 深链注入（坐标已是 WGS-84）
     private func inject() {
-        guard let w = wgsPoint else { return }
-        let lat = String(format: "%.7f", w.latitude)
-        let lon = String(format: "%.7f", w.longitude)
-        let s = DeepLink.simulate(lat: w.latitude, lon: w.longitude)
+        guard let p = injectPoint else { return }
+        let lat = String(format: "%.7f", p.latitude)
+        let lon = String(format: "%.7f", p.longitude)
+        let s = DeepLink.simulate(lat: p.latitude, lon: p.longitude)
         guard DeepLink.validate(s), let u = URL(string: s) else {
             status = "URL 构造失败：" + s
             return
         }
         UIApplication.shared.open(u) { ok in
             DispatchQueue.main.async {
-                if ok {
-                    status = "已发送：" + lat + ", " + lon
-                } else {
-                    status = "打开 StikDebug 失败，请确认已安装"
-                }
+                status = ok
+                    ? "已发送：" + lat + ", " + lon
+                    : "打开 StikDebug 失败，请确认已安装"
             }
         }
     }
