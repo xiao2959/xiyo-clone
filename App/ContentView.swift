@@ -42,6 +42,7 @@ struct ContentView: View {
     /// 授权（卡密 + 到期）
     @StateObject private var license = LicenseManager()
     @State private var showLicense: Bool = false
+    @State private var showDirect: Bool = false
 
     @State private var picked: CLLocationCoordinate2D?
     @State private var injectPoint: CLLocationCoordinate2D?
@@ -98,6 +99,9 @@ struct ContentView: View {
             }
             .sheet(isPresented: $showLicense) {
                 LicenseView(license: license)
+            }
+            .sheet(isPresented: $showDirect) {
+                DirectInjectView(target: injectPoint)
             }
             .onAppear { stikInstalled = checkStik() }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
@@ -272,6 +276,12 @@ struct ContentView: View {
                     sendClear()
                 } label: {
                     Label("恢复真实定位", systemImage: "arrow.uturn.backward")
+                }
+
+                Button {
+                    showDirect = true
+                } label: {
+                    Label("直连注入（内置隧道）", systemImage: "bolt.horizontal.circle")
                 }
             } footer: {
                 if status.isEmpty == false {

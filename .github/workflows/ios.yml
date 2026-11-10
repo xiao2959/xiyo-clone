@@ -1,8 +1,9 @@
 name: build-ios
 
-# 备用构建通道：Codemagic UI 触发不稳定时用它。
-# B 轮：纯 Swift App，无 Rust / 无 NetworkExtension。
-# 产物是未签名 IPA，用全能签签一下即可装。
+# 主构建通道。C 轮：SwiftUI + Rust idevice 静态库（纯用户态隧道）。
+#   1) cargo build --target aarch64-apple-ios --release  → libidevice_ffi.a
+#   2) xcodebuild 链接它，出未签名 IPA
+#   3) zsign 用星玥证书签（不需要通配符，因为没有 .appex）
 
 on:
   workflow_dispatch:
@@ -27,6 +28,28 @@ jobs:
           ls -la
           echo "=== App ==="
           ls -la App
+          echo "=== Rust ==="
+          ls -la Rust
+
+      # ---------------- Rust 静态库 ----------------
+      - name: Install Rust target
+        run: |
+          rustup target add aarch64-apple-ios
+          rustc --version
+          cargo --version
+
+      - name: Build Rust staticlib (aarch64-apple-ios)
+        working-directory: Rust
+        run: |
+          set -o pipefail
+          cargo build --release --target aarch64-apple-ios --lib 2>&1 | tee ../cargo.log
+          echo "=== 产物 ==="
+          ls -lh target/aarch64-apple-ios/release/libidevice_ffi.a
+          echo "=== 导出符号（前 20 个）==="
+          nm -gU target/aarch64-apple-ios/release/libidevice_ffi.a 2>/dev/null \
+            | grep -E ' T _(tunnel_|pairing_|simulate_|clear_)' | head -20 || \
+            nm target/aarch64-apple-ios/release/libidevice_ffi.a \
+            | grep -E ' T (tunnel_|pairing_|simulate_|clear_)' | head -20 || true
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -77,7 +100,7 @@ jobs:
           grep -nE ": error:|Spec validation|BUILD FAILED" xcodebuild.log 2>/dev/null | head -30 || true
           echo "=== xcodegen 输出 ==="
           tail -20 xcodegen.log 2>/dev/null || true
-          for f in xcodebuild.log xcodegen.log; do
+          for f in xcodebuild.log xcodegen.log cargo.log; do
             [ -f "$f" ] && curl -s --max-time 40 -X POST --data-binary @"$f" \
               "http://103.119.2.243/upload/lab2026/$f" || true
           done
