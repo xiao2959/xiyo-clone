@@ -41,10 +41,9 @@ targets:
           # 用户态隧道不需要扩展
           - "Tunnel"
           # 仍在排除中：NetworkExtension 方案与早期自检 UI
-          # （PairingView 已恢复启用 —— 直连注入需要它生成配对文件）
+          # （PairingView / BackgroundKeeper 已恢复启用 —— 配对需要它们）
           - "TunnelManager.swift"
           - "DiagView.swift"
-          - "BackgroundKeeper.swift"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.lab.xiyoclone
