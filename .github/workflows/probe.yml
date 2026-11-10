@@ -1,3 +1,4 @@
+# probe trigger 23:05:51
 name: probe-macos
 
 # 探针：一次性试所有 macOS runner 标签，看哪个在当前账号可用
