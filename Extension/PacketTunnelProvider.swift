@@ -18,7 +18,8 @@ private let log = Logger(subsystem: "com.lab.xiyoclone.ext", category: "tunnel")
 
 final class PacketTunnelProvider: NEPacketTunnelProvider {
 
-    private let gateway = "10.7.0.1"
+    private let gateway = "10.7.0.1"      // 隧道"对端"，App 连的就是它
+    private let clientIP = "10.7.0.2"     // 本机在隧道里的地址（不能等于 gateway！）
     private let net = "10.7.0.0"
     private let mask = "255.255.255.0"
     private let queue = DispatchQueue(label: "tunnel.io")
@@ -30,7 +31,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: gateway)
 
-        let ipv4 = NEIPv4Settings(addresses: [gateway], subnetMasks: [mask])
+        // ★ 关键修复：addresses 必须是"本机地址"，不能等于 tunnelRemoteAddress。
+        //   之前写成 [gateway]，等于把 10.7.0.1 同时当作本机和网关，
+        //   内核认为 10.7.0.1 是本地地址 -> 包不进隧道 -> NAT 收不到任何 SYN。
+        let ipv4 = NEIPv4Settings(addresses: [clientIP], subnetMasks: [mask])
         // 只接管 10.7.0.0/24；其余流量 iOS 会自动直连（这就是分流）
         ipv4.includedRoutes = [NEIPv4Route(destinationAddress: net, subnetMask: mask)]
         settings.ipv4Settings = ipv4
@@ -42,7 +46,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 log.error("setTunnelNetworkSettings: \(error.localizedDescription)")
                 completionHandler(error); return
             }
-            log.info("tunnel up, gateway=\(self.gateway)")
+            log.info("tunnel up: client=\(self.clientIP) gateway=\(self.gateway)")
             self.readLoop()
             completionHandler(nil)
         }

@@ -18,6 +18,19 @@ final class TunnelManager: ObservableObject {
     /// 自检用：配置是否已创建
     var hasConfiguration: Bool { manager != nil }
 
+    /// 扩展 bundle id：不写死，跟随主 App 的 bundle id
+    /// （全能签这类重签工具可能改主包 id，写死就对不上了）
+    var providerBundleID: String {
+        let base = Bundle.main.bundleIdentifier ?? "com.lab.xiyoclone"
+        return base + ".LocalVPNExtension"
+    }
+
+    /// 自检用：当前会话类型
+    var sessionKind: String {
+        guard let c = manager?.connection else { return "无 connection" }
+        return (c as? NETunnelProviderSession) != nil ? "NETunnelProviderSession" : "其他类型"
+    }
+
     func load() {
         NETunnelProviderManager.loadAllFromPreferences { [weak self] managers, error in
             guard let self else { return }
@@ -35,7 +48,7 @@ final class TunnelManager: ObservableObject {
     private func create() {
         let m = NETunnelProviderManager()
         let proto = NETunnelProviderProtocol()
-        proto.providerBundleIdentifier = "com.lab.xiyoclone.LocalVPNExtension"
+        proto.providerBundleIdentifier = providerBundleID
         // 扩展里通过 tunnelRemoteAddress 判断；这里给一个占位
         proto.serverAddress = "127.0.0.1"
         m.protocolConfiguration = proto
@@ -76,17 +89,29 @@ final class TunnelManager: ObservableObject {
     }
 
     /// 给扩展发消息（例如触发一次注入）
+    /// ★ 加了 4 秒兜底：扩展如果不回，也要让 UI 拿到结果，不能永远"无响应"
     func send(_ text: String, completion: @escaping (String?) -> Void) {
         guard let session = manager?.connection as? NETunnelProviderSession else {
+            lastError = "connection 不是 NETunnelProviderSession"
             completion(nil); return
         }
+
+        var finished = false
+        let finish: (String?) -> Void = { value in
+            if finished { return }
+            finished = true
+            completion(value)
+        }
+
         do {
-            try session.sendProviderMessage(text.data(using: .utf8)!) { data in
-                completion(data.flatMap { String(data: $0, encoding: .utf8) })
+            try session.sendProviderMessage(Data(text.utf8)) { data in
+                finish(data.flatMap { String(data: $0, encoding: .utf8) })
             }
         } catch {
             lastError = error.localizedDescription
-            completion(nil)
+            finish(nil)
         }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { finish(nil) }
     }
 }

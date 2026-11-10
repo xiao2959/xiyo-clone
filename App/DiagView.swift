@@ -16,6 +16,8 @@ struct DiagView: View {
     @State private var extText: String = "-"
     @State private var pairText: String = "-"
     @State private var portText: String = "-"
+    @State private var kindText: String = "-"
+    @State private var idText: String = "-"
     @State private var running: Bool = false
 
     var body: some View {
@@ -23,6 +25,8 @@ struct DiagView: View {
             List {
                 Section("检查项") {
                     row("VPN 状态", vpnText)
+                    row("会话类型", kindText)
+                    row("扩展 BundleID", idText)
                     row("扩展响应", extText)
                     row("配对文件", pairText)
                     row("10.7.0.1:62078", portText)
@@ -55,7 +59,9 @@ struct DiagView: View {
 
     private func runAll() {
         running = true
-        vpnText = tunnel.status == .connected ? "OK" : "未连接"
+        vpnText = tunnel.status == .connected ? "OK" : ("未连接(" + String(tunnel.status.rawValue) + ")")
+        kindText = tunnel.sessionKind
+        idText = tunnel.providerBundleID
         pairText = FileManager.default.fileExists(atPath: Bridge.pairingPath) ? "OK" : "缺失"
         extText = "..."
         portText = "..."
