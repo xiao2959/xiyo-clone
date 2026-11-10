@@ -1,4 +1,4 @@
-﻿# Rust
+# Rust
 Rust/target/
 App/Bridge/lib/*.a
 
@@ -22,7 +22,10 @@ push-to-github.ps1
 
 
 # 本机运维脚本（含基础设施信息，不要提交）
-tunnel/
+# ⚠️ 必须写成 /tunnel/ 只匹配根目录。
+#    写 tunnel/ 会匹配任意层级，把 App/Tunnel/（隧道扩展源码）一起忽略，
+#    导致 CI 报 “missing source directory .../App/Tunnel”。
+/tunnel/
 一键发布.cmd
 启动GitHub通道.cmd
 一键发布.ps1
