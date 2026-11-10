@@ -26,8 +26,13 @@ enum DeepLink {
         return "stikdebug://clear-location"
     }
 
-    /// 停止模拟
+    /// 停止模拟（会终止 StikDebug 里可能存在的持续/路线模拟会话）
     static func stop() -> String {
+        return "stikdebug://stop-location"
+    }
+
+    /// 停止当前模拟会话。二进制中确认 stopLocationSimulation 存在。
+    static func stopSimulation() -> String {
         return "stikdebug://stop-location"
     }
 
