@@ -29,6 +29,14 @@
 	<true/>
 	<key>MinimumOSVersion</key>
 	<string>17.0</string>
+	<!-- 配对要用 Bonjour 广播，iOS 14+ 必须声明，否则设备发现不了本机 -->
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_remotepairing-pairable-host._tcp.</string>
+		<string>_remotepairing._tcp.</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>用于与本机设备配对并建立调试隧道</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>用于「回到当前位置」，不会上传你的位置</string>
 	<key>UIFileSharingEnabled</key>

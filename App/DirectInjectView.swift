@@ -20,6 +20,7 @@ struct DirectInjectView: View {
 
     @State private var pairingURL: URL?
     @State private var showPicker = false
+    @State private var showPairing = false
     @State private var busy = false
     @State private var log: [String] = []
     @State private var status = "还没建隧道"
@@ -32,16 +33,22 @@ struct DirectInjectView: View {
                         Text(u.lastPathComponent)
                             .font(.system(.footnote, design: .monospaced))
                     } else {
-                        Text("还没选")
+                        Text("还没配对")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
                     Button {
+                        showPairing = true
+                    } label: {
+                        Label("生成配对文件（App 内配对）", systemImage: "person.badge.key")
+                            .fontWeight(.semibold)
+                    }
+                    Button {
                         showPicker = true
                     } label: {
-                        Label("选择配对文件", systemImage: "doc.badge.plus")
+                        Label("从文件导入", systemImage: "doc.badge.plus")
                     }
-                    Text("iOS 开发者模式配对后生成，约 500 字节，文件头是 <?xml")
+                    Text("点「生成配对文件」→ 按提示到 设置 里输入 6 位码 → 自动保存，不用手动找文件")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -131,7 +138,23 @@ struct DirectInjectView: View {
                     append("选择失败: \(e.localizedDescription)")
                 }
             }
+            .sheet(isPresented: $showPairing, onDismiss: checkPairingFile) {
+                PairingView()
+            }
         }
+    }
+
+    /// 配对页关闭后，检查 App 内是否已生成 pairing.plist，有就自动选上
+    private func checkPairingFile() {
+        let path = Bridge.pairingPath
+        guard FileManager.default.fileExists(atPath: path) else {
+            append("配对页已关闭，但还没生成配对文件")
+            return
+        }
+        let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? nil
+        pairingURL = URL(fileURLWithPath: path)
+        append("已自动载入配对文件（\(size ?? 0) 字节）")
+        status = "配对文件就绪，可以建隧道了"
     }
 
     // MARK: - 动作
