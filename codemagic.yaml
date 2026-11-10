@@ -9,14 +9,32 @@ workflows:
       vars:
         SCHEME: XiYOClone
     scripts:
-      # B 轮：纯 Swift App，不再需要 Rust 静态库。
-      # 保留这一步做占位，避免改动 workflow 结构导致 Codemagic 重新校验配置。
+      # C 轮：隧道跑在 Rust（idevice, MIT）里，必须编出 libidevice_ffi.a
+      # 注意：B 轮这里曾是 echo 占位，导致 ld: library 'idevice_ffi' not found
       - name: Install Rust + iOS target
         script: |
-          echo "B: pure Swift app, Rust step skipped"
+          if ! command -v cargo >/dev/null 2>&1; then
+            echo "安装 rustup…"
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          fi
+          # shellcheck disable=SC1091
+          source "$HOME/.cargo/env"
+          rustup target add aarch64-apple-ios
+          rustc --version
+          cargo --version
       - name: Build Rust static lib
         script: |
-          echo "B: no Rust static lib needed"
+          # shellcheck disable=SC1091
+          source "$HOME/.cargo/env"
+          cd Rust
+          cargo build --release --target aarch64-apple-ios --lib 2>&1 | tee ../cargo.log
+          echo "=== 产物 ==="
+          ls -lh target/aarch64-apple-ios/release/libidevice_ffi.a
+          echo "=== 导出符号（前 15 个）==="
+          nm -gU target/aarch64-apple-ios/release/libidevice_ffi.a 2>/dev/null \
+            | grep -E ' T _(tunnel_|pairing_|simulate_|clear_)' | head -15 \
+            || nm target/aarch64-apple-ios/release/libidevice_ffi.a \
+            | grep -E ' T (tunnel_|pairing_|simulate_|clear_)' | head -15 || true
       - name: Install XcodeGen and generate project
         script: |
           brew install xcodegen
@@ -62,3 +80,4 @@ workflows:
     artifacts:
       - XiYOClone-unsigned.ipa
       - xcodebuild.log
+      - cargo.log
