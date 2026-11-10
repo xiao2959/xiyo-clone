@@ -13,7 +13,7 @@
 //  链路：
 //    1. RpPairingFile::read_from_file           读 rppairing 配对文件
 //    2. TcpStream::connect(host, rp_port)       连设备的 _remotepairing._tcp
-//    3. RpPairingSocket::new_device + RemotePairingClient::connect
+//    3. RpPairingSocket::new（host 角色）+ RemotePairingClient::connect
 //    4. client.create_tcp_listener()            设备开监听，拿到端口
 //    5. TcpStream::connect(host, listener_port)
 //    6. connect_tls_psk_tunnel_native           TLS-PSK + CDTunnel 握手
@@ -206,7 +206,11 @@ pub async fn open_tunnel(
         .await
         .map_err(|e| format!("连 _remotepairing._tcp({port}) 失败: {e}"))?;
 
-    let sock = RpPairingSocket::new_device(stream);
+    // ⚠️ 角色必须用 new()（originatedBy: "host"）：
+    //    建隧道是「我方主动连设备」，我们是 initiating host。
+    //    用 new_device()（originatedBy: "device"）是设备主动连入配对的场景，
+    //    在这里会被设备直接拒绝 → pair-verify 报 "device socket io failed"。
+    let sock = RpPairingSocket::new(stream);
     let mut client = RemotePairingClient::new(sock, "xiyo-lab");
     client
         .connect(&mut pf, || async { String::new() })
