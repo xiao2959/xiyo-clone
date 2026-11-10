@@ -81,7 +81,7 @@ struct PairingView: View {
         running = true
         status = "正在启动本地配对服务…"
 
-        let path = IDeviceBridge.pairingPath
+        let path = Bridge.pairingPath
         let port = Bridge.pairingStart(name: "定位隧道", savePath: path)
         guard port > 0 else {
             running = false
