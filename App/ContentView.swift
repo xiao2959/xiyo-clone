@@ -164,12 +164,6 @@ struct ContentView: View {
                 .disabled(injectPoint == nil)
 
                 Button {
-                    sendStopAll()
-                } label: {
-                    Label("停止所有模拟（防跳回）", systemImage: "stop.circle")
-                }
-
-                Button {
                     sendClear()
                 } label: {
                     Label("恢复真实定位", systemImage: "arrow.uturn.backward")
@@ -218,14 +212,16 @@ struct ContentView: View {
                 }
             }
 
-            Section("换位置后 1~2 秒跳回旧点？") {
-                Text("这是 StikDebug 里还留着「持续/路线模拟」会话，它会周期性重发旧坐标。"
-                     + "本 App 现在每次注入前会先发 stop 指令停掉旧会话，再设新点。")
+            Section("关于弹窗") {
+                Text("点「注入」后 StikDebug 会弹一次 Simulate Location?，"
+                     + "点 Set Location 确认即可。这是它自己的安全确认，正常现象。")
                     .font(.footnote)
-                Text("如果仍然跳回：进 StikDebug → 找到 Route / 路线模拟 / 持续模拟，"
-                     + "手动停止或清除队列；或先点本页「停止所有模拟（防跳回）」，再注入。")
+                Text("⚠️ 如果弹的是 Clear Location?（清除位置），不要点，"
+                     + "点左上角返回或关掉。清除了就会回到真实定位。")
                     .font(.footnote)
                     .foregroundStyle(.orange)
+                Text("每次换位置只需点一次「注入到手机」，等它弹 Simulate Location? 再确认。")
+                    .font(.footnote)
             }
 
             Section("原理") {
@@ -291,45 +287,28 @@ struct ContentView: View {
         return UIApplication.shared.canOpenURL(u)
     }
 
-    /// 换位置原子流程：先停旧模拟会话 → 稍等 → 再设新坐标。
+    /// 一次注入只发一个深链。
     ///
-    /// 为什么要停：StikDebug 二进制里有 RouteSimulationPlan / Timer /
-    /// LocationSimulationCommandQueue / stopLocationSimulation —— 说明它支持
-    /// 持续/路线模拟。若之前的会话还在跑，会周期性重发旧坐标，
-    /// 表现就是"新位置过去一两秒又被拉回去"。
+    /// ⚠️ 重要教训：G 版曾"先 stop 再 simulate"，结果 StikDebug 每个深链
+    ///    都要弹一次确认框（Clear Location? / Simulate Location?）。
+    ///    用户点掉 Clear 后位置直接回真实 GPS，看起来就是"跳回去"。
+    ///    两个深链无法串行，必须只发设置坐标这一条。
     private func inject() {
         guard let p = injectPoint else { return }
         let lat = String(format: "%.7f", p.latitude)
         let lon = String(format: "%.7f", p.longitude)
-
-        // 第 1 步：停掉可能存在的持续模拟
-        if let stop = URL(string: DeepLink.stopSimulation()) {
-            UIApplication.shared.open(stop)
+        let s = DeepLink.simulate(lat: p.latitude, lon: p.longitude)
+        guard DeepLink.validate(s), let u = URL(string: s) else {
+            status = "URL 构造失败：" + s
+            return
         }
-
-        // 第 2 步：给 StikDebug 一点时间处理 stop，再发新坐标
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
-            let s = DeepLink.simulate(lat: p.latitude, lon: p.longitude)
-            guard DeepLink.validate(s), let u = URL(string: s) else {
-                self.status = "URL 构造失败：" + s
-                return
-            }
-            UIApplication.shared.open(u) { ok in
-                DispatchQueue.main.async {
-                    self.status = ok
-                        ? "已停止旧模拟并注入：" + lat + ", " + lon
-                        : "打开 StikDebug 失败，请确认已安装"
-                }
-            }
-        }
-    }
-
-    /// 彻底停止：只发 stop，不设新点（用来清掉后台持续模拟）
-    private func sendStopAll() {
-        guard let u = URL(string: DeepLink.stopSimulation()) else { return }
         UIApplication.shared.open(u) { ok in
             DispatchQueue.main.async {
-                self.status = ok ? "已发送停止指令" : "打开 StikDebug 失败"
+                if ok {
+                    status = "已发送：" + lat + ", " + lon + "（在 StikDebug 里点 Set Location 确认）"
+                } else {
+                    status = "打开 StikDebug 失败，请确认已安装"
+                }
             }
         }
     }
