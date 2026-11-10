@@ -12,18 +12,20 @@ settings:
     ENABLE_USER_SCRIPT_SANDBOXING: NO
 
 # ===========================================================================
-# B 轮优化：纯换算 App
+# C 轮：一个 App 搞定（内置隧道）
 #
-#   A 轮确认 rppairing→隧道→RSD 注入链路无法在当前环境验证，
-#   因此把整个 NetworkExtension 扩展、Rust 静态库、配对/自检 UI 全部移除。
+#   架构：
+#     主 App（SwiftUI 界面 + 地图 + 授权 + 换算）
+#       └── TunnelExtension.appex   ← 新建，负责建 utun
+#       └── Rust idevice(MIT)       ← 负责 rppairing / CDTunnel / RSD / 注入
 #
-#   现在 App 只做三件能 100% 验证的事：
-#     1. 地图点选（MapKit）
-#     2. GCJ-02 → WGS-84 换算（CoordTransform，已与 Python 逐位比对）
-#     3. 复制坐标 / 生成 GPX 分享 / 打开 StikDebug（stikdebug://）
+#   为什么要扩展：
+#     iOS 上普通进程无法创建 utun。访问设备的 RSD（USB 侧 IPv6 地址）
+#     必须由 NetworkExtension 的 packet-tunnel 建虚拟网卡。
+#     LocalDevVPN 做的事就是这个（573KB），我们内置进去就不需要第二个 App。
 #
-#   好处：不再需要 NE entitlement，全能签随便签就能装；
-#         不再有"扩展无响应 / 10.7.0.1 不通 / 注入失败 -1"。
+#   ⚠️ 签名前提：扩展需要独立 bundle id（<主App>.tunnel），
+#      因此必须用「通配符 / 多 App ID」描述文件，单 App ID 的证书签不了。
 # ===========================================================================
 targets:
   XiYOClone:
@@ -34,7 +36,9 @@ targets:
         excludes:
           - "Info.plist"
           - "App.entitlements"
-          # 旧链路文件（保留在仓库，便于以后恢复）
+          # 扩展单独成 target，主 App 不重复编译
+          - "Tunnel"
+          # 旧链路文件（A 轮遗留，等隧道接通后再逐个启用）
           - "Bridge"
           - "TunnelManager.swift"
           - "DiagView.swift"
@@ -44,16 +48,31 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.lab.xiyoclone
         INFOPLIST_FILE: App/Info.plist
-        # 不再用 entitlements：纯 App 不需要任何特殊权限
-        CODE_SIGN_ENTITLEMENTS: ""
-        SWIFT_OBJC_BRIDGING_HEADER: ""
+        CODE_SIGN_ENTITLEMENTS: App/App.entitlements
     dependencies:
       - sdk: MapKit.framework
+      - target: TunnelExtension
+        embed: true
+
+  TunnelExtension:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: App/Tunnel
+        excludes:
+          - "Info.plist"
+          - "Tunnel.entitlements"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lab.xiyoclone.tunnel
+        INFOPLIST_FILE: App/Tunnel/Info.plist
+        CODE_SIGN_ENTITLEMENTS: App/Tunnel/Tunnel.entitlements
 
 schemes:
   XiYOClone:
     build:
       targets:
         XiYOClone: all
+        TunnelExtension: all
     run:
       config: Debug
