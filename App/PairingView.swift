@@ -10,6 +10,7 @@
 //
 
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 struct PairingView: View {
@@ -25,6 +26,7 @@ struct PairingView: View {
 
     private let service = BonjourPublisher()
     @State private var timer: Timer?
+    @State private var bgTask: UIBackgroundTaskIdentifier = .invalid
 
     var body: some View {
         NavigationStack {
@@ -59,7 +61,7 @@ struct PairingView: View {
                         .font(.footnote)
                     Text("然后输入上面这 6 位数字，再输入锁屏密码。")
                         .font(.footnote)
-                    Text("如果一直没反应，改用「从文件导入 pairing.plist」。")
+                    Text("配对过程请保持本 App 在后台运行（切到设置时不要杀掉它），5 分钟内完成。")
                         .font(.footnote)
                         .foregroundStyle(.orange)
                 }
@@ -97,6 +99,16 @@ struct PairingView: View {
 
         service.publish(port: UInt16(port))
         status = "已发布配对服务（端口 \(port)），请在手机上完成配对"
+
+        // 关键：用户要切到「设置」里点配对，App 会被切到后台。
+        // 不申请后台执行时间的话，socket 会被系统挂起，配对就"没反应"。
+        UIApplication.shared.isIdleTimerDisabled = true
+        bgTask = UIApplication.shared.beginBackgroundTask(withName: "pairing") {
+            if bgTask != .invalid {
+                UIApplication.shared.endBackgroundTask(bgTask)
+                bgTask = .invalid
+            }
+        }
 
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { t in
@@ -149,6 +161,12 @@ struct PairingView: View {
         timer?.invalidate()
         timer = nil
         service.stop()
+
+        UIApplication.shared.isIdleTimerDisabled = false
+        if bgTask != .invalid {
+            UIApplication.shared.endBackgroundTask(bgTask)
+            bgTask = .invalid
+        }
     }
 
     // MARK: - 导入配对文件

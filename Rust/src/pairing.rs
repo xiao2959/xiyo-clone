@@ -204,7 +204,8 @@ pub extern "C" fn pairing_start(name: *const c_char, save_path: *const c_char) -
         plog("listener ready, waiting for device");
 
         // 等设备连入（60 秒超时）
-        let accept = tokio::time::timeout(Duration::from_secs(60), listener.accept()).await;
+        // 5 分钟：用户要切到设置 -> 点配对 -> 输 6 位码 -> 输锁屏密码，60 秒根本不够
+        let accept = tokio::time::timeout(Duration::from_secs(300), listener.accept()).await;
         let stream = match accept {
             Ok(Ok((s, _addr))) => s,
             Ok(Err(e)) => {
@@ -212,7 +213,7 @@ pub extern "C" fn pairing_start(name: *const c_char, save_path: *const c_char) -
                 return;
             }
             Err(_) => {
-                finish(Err("等待设备连接超时（60s）".into()));
+                finish(Err("等待设备连接超时（300s）".into()));
                 return;
             }
         };
