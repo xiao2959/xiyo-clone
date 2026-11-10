@@ -1,127 +1,126 @@
 //
 //  NativeMapView.swift
-//  用原生 MKMapView 替代 SwiftUI Map，解决"位置来回跳"
+//  原生 MKMapView + 视野持久化
 //
-//  为什么换：
-//    SwiftUI 的 Map(position: $camera) 是双向绑定。用户一拖地图，
-//    MapKit 就回写 camera；代码里同时用 .region(...) 设置 → 互相覆盖 → 视觉跳动。
+//  关键修复（对比上一版）：
+//    旧：makeUIView 里写死初始 region → View 一重建就跳回原点
+//    新：视野从 MapState 恢复，用户拖动写回 MapState，
+//        只有"主动跳转"才 setRegion。这样重建多少次都不跳。
 //
-//  原生 MKMapView 的做法：
-//    - 只有**主动跳转**（搜索/输入经纬度/回当前位置）才 setRegion
-//    - 用户拖动不会写回 SwiftUI state，所以不会触发 updateUIView 里的 setRegion
-//    - 点选用 UITapGestureRecognizer + convert，稳定且精确
+//  交互对齐官方版：长按选点（官方 24 处 LongPress），单击也保留。
 //
 
 import SwiftUI
 import MapKit
 
 struct NativeMapView: UIViewRepresentable {
-    /// 主动跳转目标。只有它变化时才 setRegion（且做去重）
-    let center: CLLocationCoordinate2D?
-    /// 当前选中的点（红色 pin）
+    @ObservedObject var state: MapState
     let picked: CLLocationCoordinate2D?
-    /// 点地图回调
     let onPick: (CLLocationCoordinate2D) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onPick: onPick)
+        Coordinator(state: state, onPick: onPick)
     }
 
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView()
         map.delegate = context.coordinator
-        map.showsUserLocation = false   // 不显示蓝点，避免模拟定位后跟着抖
+        map.showsUserLocation = false
         map.isRotateEnabled = false
         map.isPitchEnabled = false
+        map.isZoomEnabled = true
+        map.isScrollEnabled = true
 
-        // 初始视野：潍坊
-        let initial = CLLocationCoordinate2D(latitude: 36.7069, longitude: 119.1618)
-        map.setRegion(MKCoordinateRegion(
-            center: initial,
-            span: MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02)),
-            animated: false)
-        context.coordinator.lastCenter = initial
+        // ★ 从 state 恢复视野（不是写死初始值）
+        let center = state.restoreCenter()
+        let span = state.restoreSpan()
+        map.setRegion(MKCoordinateRegion(center: center, span: span), animated: false)
+        context.coordinator.lastAppliedCenter = center
 
-        // ★ 对齐官方版：用「长按」选点，不用单击。
-        //   官方二进制里有 24 处 LongPress + 文案「长按地图选择位置」。
-        //   单击会被 MKMapView 识别为"可能开始平移"，与 pin 更新互相打架，
-        //   表现就是"点一下位置跳一下"。长按不会触发地图手势冲突。
+        // 长按选点（官方方式）
         let longPress = UILongPressGestureRecognizer(
             target: context.coordinator,
             action: #selector(Coordinator.handleLongPress(_:)))
         longPress.minimumPressDuration = 0.35
-        longPress.allowableMovement = 8
+        longPress.allowableMovement = 10
         map.addGestureRecognizer(longPress)
 
-        // 同时保留单击：官方只要长按，但用户习惯点一下，两者都接不影响
+        // 单击也接，但让位给长按
         let tap = UITapGestureRecognizer(target: context.coordinator,
                                          action: #selector(Coordinator.handleTap(_:)))
-        tap.require(toFail: longPress)   // 优先判长按，避免一次操作触发两次
+        tap.require(toFail: longPress)
         map.addGestureRecognizer(tap)
+
         return map
     }
 
     func updateUIView(_ map: MKMapView, context: Context) {
-        // struct 会被重建，闭包要同步给常驻的 Coordinator
         context.coordinator.onPick = onPick
 
-        // 只有主动跳转且与上次不同才动地图 —— 这是"不跳"的关键
-        if let c = center, context.coordinator.shouldMove(to: c) {
-            context.coordinator.lastCenter = c
+        // 只有"请求跳转"才动地图，且只动一次
+        if let target = state.takeJump() {
+            context.coordinator.lastAppliedCenter = target
             map.setRegion(MKCoordinateRegion(
-                center: c,
+                center: target,
                 span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)),
                 animated: true)
         }
 
-        // 更新红色 pin
-        if let p = picked {
-            if let ann = context.coordinator.annotation {
-                ann.coordinate = p
-            } else {
-                let a = MKPointAnnotation()
-                a.coordinate = p
-                a.title = "目标"
-                map.addAnnotation(a)
-                context.coordinator.annotation = a
-            }
-        } else if let ann = context.coordinator.annotation {
-            map.removeAnnotation(ann)
-            context.coordinator.annotation = nil
-        }
+        // pin 更新（不碰视野）
+        context.coordinator.syncAnnotation(on: map, to: picked)
     }
 
-    final class Coordinator: NSObject, MKMapViewDelegate {
-        var onPick: (CLLocationCoordinate2D) -> Void
-        var lastCenter: CLLocationCoordinate2D?
-        var annotation: MKPointAnnotation?
+    // MARK: - Coordinator
 
-        init(onPick: @escaping (CLLocationCoordinate2D) -> Void) {
+    final class Coordinator: NSObject, MKMapViewDelegate {
+        let state: MapState
+        var onPick: (CLLocationCoordinate2D) -> Void
+        var lastAppliedCenter: CLLocationCoordinate2D?
+        var annotation: MKPointAnnotation?
+        /// 抑制标记：setRegion 触发的 regionDidChange 不要写回 state
+        var suppressRecord = false
+
+        init(state: MapState, onPick: @escaping (CLLocationCoordinate2D) -> Void) {
+            self.state = state
             self.onPick = onPick
         }
 
-        /// 阈值去重：坐标没实质变化就不 setRegion
-        func shouldMove(to c: CLLocationCoordinate2D) -> Bool {
-            guard let l = lastCenter else { return true }
-            return abs(l.latitude - c.latitude) > 0.000001
-                || abs(l.longitude - c.longitude) > 0.000001
+        // 用户拖动/缩放后记录视野
+        func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
+            guard suppressRecord == false else { return }
+            state.record(center: mapView.region.center, span: mapView.region.span)
+        }
+
+        @objc func handleLongPress(_ g: UILongPressGestureRecognizer) {
+            guard let map = g.view as? MKMapView, g.state == .began else { return }
+            let coord = map.convert(g.location(in: map), toCoordinateFrom: map)
+            onPick(coord)
         }
 
         @objc func handleTap(_ g: UITapGestureRecognizer) {
-            guard let map = g.view as? MKMapView else { return }
-            let point = g.location(in: map)
-            let coord = map.convert(point, toCoordinateFrom: map)
+            guard let map = g.view as? MKMapView, g.state == .ended else { return }
+            let coord = map.convert(g.location(in: map), toCoordinateFrom: map)
             onPick(coord)
         }
 
-        /// 长按选点（官方版的方式）：按下即选，位置即时反馈，不会"跳"
-        @objc func handleLongPress(_ g: UILongPressGestureRecognizer) {
-            guard let map = g.view as? MKMapView else { return }
-            // 只在长按开始（Began）时选一次，Changed 期间手指微动不重复选
-            guard g.state == .began else { return }
-            let point = g.location(in: map)
-            let coord = map.convert(point, toCoordinateFrom: map)
-            onPick(coord)
+        func syncAnnotation(on map: MKMapView, to coord: CLLocationCoordinate2D?) {
+            guard let c = coord else {
+                if let a = annotation { map.removeAnnotation(a); annotation = nil }
+                return
+            }
+            if let a = annotation {
+                // 只在真的变了才动，避免抖动
+                if abs(a.coordinate.latitude - c.latitude) > 1e-9
+                    || abs(a.coordinate.longitude - c.longitude) > 1e-9 {
+                    a.coordinate = c
+                }
+            } else {
+                let a = MKPointAnnotation()
+                a.coordinate = c
+                a.title = "目标"
+                map.addAnnotation(a)
+                annotation = a
+            }
         }
 
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
@@ -133,6 +132,7 @@ struct NativeMapView: UIViewRepresentable {
             if let m = v as? MKMarkerAnnotationView {
                 m.markerTintColor = .systemRed
                 m.glyphText = "目标"
+                m.animatesWhenAdded = false
             }
             return v
         }

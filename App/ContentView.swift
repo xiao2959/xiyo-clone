@@ -36,8 +36,8 @@ enum InjectMode: String, CaseIterable, Identifiable {
 }
 
 struct ContentView: View {
-    /// 只有"主动跳转"才设置它；用户拖地图不会写回，所以不会来回跳
-    @State private var jumpTarget: CLLocationCoordinate2D?
+    /// 地图视野持久化（View 重建也不会跳回原点）
+    @StateObject private var mapState = MapState()
 
     @State private var picked: CLLocationCoordinate2D?
     @State private var injectPoint: CLLocationCoordinate2D?
@@ -122,7 +122,7 @@ struct ContentView: View {
 
     /// 跳到指定坐标并直接把它设为目标（省得跳完还要再点一下地图）
     private func jump(to c: CLLocationCoordinate2D) {
-        jumpTarget = c
+        mapState.requestJump(to: c)
         applyPick(c)
         status = "已跳到 " + format(c)
     }
@@ -135,14 +135,14 @@ struct ContentView: View {
             return
         }
         // 回到当前位置只移动地图，不覆盖已选的目标点
-        jumpTarget = c
+        mapState.requestJump(to: c)
         status = "已回到当前位置（目标点保留）"
     }
 
     // MARK: - 地图（原生 MKMapView，不来回跳）
 
     private var mapArea: some View {
-        NativeMapView(center: jumpTarget, picked: picked) { c in
+        NativeMapView(state: mapState, picked: picked) { c in
             applyPick(c)
         }
     }
