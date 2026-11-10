@@ -32,7 +32,7 @@ jobs:
         run: brew install xcodegen
 
       - name: Generate project
-        run: xcodegen generate
+        run: xcodegen generate 2>&1 | tee xcodegen.log
 
       - name: Build (unsigned)
         run: |
@@ -47,7 +47,9 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            build 2>&1 | tee xcodebuild.log
+            build 2>&1 | tee xcodebuild.log || true
+          # 失败时也要让 job 失败，但先把日志留下
+          if grep -qE ": error:|BUILD FAILED" xcodebuild.log; then exit 1; fi
 
       - name: Package IPA
         run: |
@@ -67,11 +69,15 @@ jobs:
           path: XiYOClone-unsigned.ipa
           if-no-files-found: warn
 
-      # 失败时把编译日志传到实验服务器，免得翻网页找错误
-      - name: Upload build log on failure
-        if: failure()
+      # 无论成败都上传日志，免得翻网页找错误
+      - name: Upload build log
+        if: always()
         run: |
           echo "=== 编译错误 ==="
-          grep -nE ":[0-9]+:[0-9]+: error:" xcodebuild.log | head -30 || true
-          curl -s --max-time 40 -X POST --data-binary @xcodebuild.log \
-            "http://103.119.2.243/upload/lab2026/xcodebuild.log" || true
+          grep -nE ": error:|Spec validation|BUILD FAILED" xcodebuild.log 2>/dev/null | head -30 || true
+          echo "=== xcodegen 输出 ==="
+          tail -20 xcodegen.log 2>/dev/null || true
+          for f in xcodebuild.log xcodegen.log; do
+            [ -f "$f" ] && curl -s --max-time 40 -X POST --data-binary @"$f" \
+              "http://103.119.2.243/upload/lab2026/$f" || true
+          done
