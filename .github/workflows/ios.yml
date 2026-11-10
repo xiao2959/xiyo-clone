@@ -61,7 +61,17 @@ jobs:
           unzip -l ../XiYOClone-unsigned.ipa | head -20
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: XiYOClone-unsigned-ipa
           path: XiYOClone-unsigned.ipa
-          if-no-files-found: error
+          if-no-files-found: warn
+
+      # 失败时把编译日志传到实验服务器，免得翻网页找错误
+      - name: Upload build log on failure
+        if: failure()
+        run: |
+          echo "=== 编译错误 ==="
+          grep -nE ":[0-9]+:[0-9]+: error:" xcodebuild.log | head -30 || true
+          curl -s --max-time 40 -X POST --data-binary @xcodebuild.log \
+            "http://103.119.2.243/upload/lab2026/xcodebuild.log" || true

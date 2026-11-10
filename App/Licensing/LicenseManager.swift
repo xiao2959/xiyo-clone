@@ -79,7 +79,7 @@ final class LicenseManager: ObservableObject {
     /// 到期时间显示
     var expireText: String {
         if state == .unactivated { return "—" }
-        License.dateText(fromEpoch: expireEpoch)
+        return License.dateText(fromEpoch: expireEpoch)
     }
 
     /// 激活
