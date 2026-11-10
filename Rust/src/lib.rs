@@ -13,3 +13,5 @@ pub mod pairing;
 pub mod pairing_kind;
 pub mod inject;
 pub mod coredevice_location;
+pub mod tunnel;
+pub mod ffi_tunnel;
