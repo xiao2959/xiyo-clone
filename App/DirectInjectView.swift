@@ -197,22 +197,51 @@ struct DirectInjectView: View {
         guard let url = pairingURL else { return }
         busy = true
 
-        // ① 用 Bonjour 解析 _remotepairing._tcp 的真实端口
-        //    （设备上的端口不固定，硬编码探测找不到）
+        // ① 用 Bonjour 解析 _remotepairing._tcp 的地址和端口
         status = "正在解析配对端口…"
         append("① 浏览 _remotepairing._tcp")
-        let (port, note) = await RpPortResolver.shared.resolve()
+        let (port, hosts, note) = await RpPortResolver.shared.resolve()
         append(note)
 
-        // ② 建隧道
+        // 候选主机：先试解析出来的真实地址，最后才试 loopback。
+        // 只连 127.0.0.1 有可能连到别的东西上（连上后被断开 → io 失败）。
+        var candidates: [String] = []
+        for h in hosts where h.isEmpty == false && candidates.contains(h) == false {
+            candidates.append(h)
+        }
+        if candidates.contains("127.0.0.1") == false {
+            candidates.append("127.0.0.1")
+        }
+
+        let portNum: Int32 = port.map { Int32($0) } ?? 0
+        append("② 开始建隧道（端口 \(port.map { String($0) } ?? "自动探测")，候选地址 \(candidates.joined(separator: ", "))）")
         status = "正在建立隧道…"
-        let portText = port.map { String($0) } ?? "自动探测"
-        append("② 建立隧道（端口 \(portText)）")
-        let r = await TunnelBridge.open(rpPort: port.map { Int32($0) } ?? 0,
-                                       pairingPath: url.path)
-        tunnelReady = r.ok
-        status = r.ok ? "隧道已建立，可以注入了" : "失败：\(r.codeText)"
-        append("\(r.ok ? "✅" : "❌") [\(r.code)] \(r.message)")
+
+        var lastMsg = ""
+        for host in candidates {
+            append("   尝试 \(host):\(port.map { String($0) } ?? "?")")
+            let r = await TunnelBridge.open(host: host,
+                                           rpPort: portNum,
+                                           pairingPath: url.path)
+            if r.ok {
+                tunnelReady = true
+                status = "隧道已建立，可以注入了"
+                append("✅ [\(r.code)] \(r.message)")
+                busy = false
+                return
+            }
+            lastMsg = "[\(r.code)] \(r.message)"
+            append("   ❌ \(lastMsg)")
+            // 如果是「隧道层」的错误（TLS/RSD），换地址重试也没用，直接停
+            if r.code == Int32(TunnelBridge.Code.noService.rawValue)
+                || r.code == Int32(TunnelBridge.Code.connectFailed.rawValue) {
+                break
+            }
+        }
+
+        tunnelReady = false
+        status = "失败：建隧道失败"
+        append("❌ 全部候选地址都失败，最后一条：\(lastMsg)")
         busy = false
     }
 
