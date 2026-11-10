@@ -164,6 +164,10 @@ struct ContentView: View {
                 busy = false
                 if rc == 0 {
                     note = "已注入"
+                } else if rc == -1 {
+                    note = "注入失败(-1 配对文件不可用)"
+                } else if rc == -2 {
+                    note = "注入失败(-2 连不上 10.7.0.1)"
                 } else {
                     note = "注入失败(" + String(rc) + ")"
                 }

@@ -18,6 +18,7 @@ struct DiagView: View {
     @State private var portText: String = "-"
     @State private var kindText: String = "-"
     @State private var idText: String = "-"
+    @State private var errText: String = "-"
     @State private var running: Bool = false
 
     var body: some View {
@@ -30,9 +31,14 @@ struct DiagView: View {
                     row("扩展响应", extText)
                     row("配对文件", pairText)
                     row("10.7.0.1:62078", portText)
+                    row("错误", errText)
                 }
                 Section {
                     Button(running ? "检测中…" : "开始自检") { runAll() }
+                        .disabled(running)
+                    Button("重建 VPN 配置并启动") { rebuild() }
+                        .disabled(running)
+                    Button("停止隧道") { tunnel.stop(); runAll() }
                         .disabled(running)
                 }
                 Section("说明") {
@@ -62,13 +68,15 @@ struct DiagView: View {
         vpnText = tunnel.status == .connected ? "OK" : ("未连接(" + String(tunnel.status.rawValue) + ")")
         kindText = tunnel.sessionKind
         idText = tunnel.providerBundleID
-        pairText = FileManager.default.fileExists(atPath: Bridge.pairingPath) ? "OK" : "缺失"
+        pairText = pairFileText()
         extText = "..."
         portText = "..."
+        errText = tunnel.lastError ?? "-"
 
         tunnel.send("ping") { reply in
             DispatchQueue.main.async {
-                extText = (reply == "pong") ? "OK" : "无响应"
+                extText = (reply == "pong") ? "OK" : ("无响应[" + (reply ?? "nil") + "]")
+                errText = tunnel.lastError ?? "-"
             }
         }
 
@@ -76,6 +84,18 @@ struct DiagView: View {
             DispatchQueue.main.async {
                 portText = ok ? "OK" : "不通"
                 running = false
+            }
+        }
+    }
+
+    private func rebuild() {
+        running = true
+        errText = "重建中…"
+        tunnel.rebuildAndStart { msg in
+            DispatchQueue.main.async {
+                errText = msg
+                running = false
+                runAll()
             }
         }
     }

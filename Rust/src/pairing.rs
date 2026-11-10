@@ -435,6 +435,39 @@ fn make_provider(pairing_path: &str, host: &str) -> Result<TcpProvider, String> 
     })
 }
 
+// ---------------------------------------------------------------------------
+// 5.5) 配对文件体检：返回 0=可解析；-1=不存在；-2=读失败；-3=不是合法 pairing 文件
+//      并把详情写进 status 字符串
+// ---------------------------------------------------------------------------
+#[no_mangle]
+pub extern "C" fn pairing_file_check(path: *const c_char) -> i32 {
+    let p = cstr(path);
+    if p.is_empty() {
+        return -1;
+    }
+    let meta = match std::fs::metadata(&p) {
+        Ok(m) => m,
+        Err(_) => {
+            plog(&format!("file_check: 文件不存在 {p}"));
+            return -1;
+        }
+    };
+    plog(&format!("file_check: {p} 大小={} 字节", meta.len()));
+    if meta.len() == 0 {
+        return -2;
+    }
+    match PairingFile::read_from_file(&p) {
+        Ok(_) => {
+            plog("file_check: PairingFile 解析成功");
+            0
+        }
+        Err(e) => {
+            plog(&format!("file_check: PairingFile 解析失败 {e}"));
+            -3
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn simulate_location(
     pairing_path: *const c_char,

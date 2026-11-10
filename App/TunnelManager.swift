@@ -114,4 +114,98 @@ final class TunnelManager: ObservableObject {
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 4) { finish(nil) }
     }
+
+    /// 删掉所有旧 VPN 配置 → 重新建 → 启动 → 3 秒后 ping 一次
+    /// 用来排除"配置指向旧扩展 id / 配置损坏"这类问题
+    func rebuildAndStart(_ done: @escaping (String) -> Void) {
+        lastError = "读取旧配置…"
+        NETunnelProviderManager.loadAllFromPreferences { [weak self] managers, error in
+            guard let self else { return }
+            if let error {
+                DispatchQueue.main.async {
+                    self.lastError = error.localizedDescription
+                    done("读取配置失败: " + error.localizedDescription)
+                }
+                return
+            }
+            let list = managers ?? []
+            DispatchQueue.main.async { self.lastError = "发现 \(list.count) 个旧配置" }
+            if list.isEmpty {
+                DispatchQueue.main.async { self.createAndStart(done) }
+                return
+            }
+            var remaining = list.count
+            for m in list {
+                m.removeFromPreferences { _ in
+                    remaining -= 1
+                    if remaining == 0 {
+                        DispatchQueue.main.async { self.createAndStart(done) }
+                    }
+                }
+            }
+        }
+    }
+
+    private func createAndStart(_ done: @escaping (String) -> Void) {
+        lastError = "创建新配置…"
+        let m = NETunnelProviderManager()
+        let proto = NETunnelProviderProtocol()
+        proto.providerBundleIdentifier = providerBundleID
+        proto.serverAddress = "10.7.0.1"
+        m.protocolConfiguration = proto
+        m.localizedDescription = "本地定位隧道"
+        m.isEnabled = true
+
+        m.saveToPreferences { [weak self] error in
+            guard let self else { return }
+            if let error {
+                DispatchQueue.main.async {
+                    self.lastError = error.localizedDescription
+                    done("保存配置失败: " + error.localizedDescription)
+                }
+                return
+            }
+            m.loadFromPreferences { loadErr in
+                DispatchQueue.main.async {
+                    if let loadErr {
+                        self.lastError = loadErr.localizedDescription
+                        done("加载配置失败: " + loadErr.localizedDescription)
+                        return
+                    }
+                    self.manager = m
+                    self.observe(m)
+                    do {
+                        try m.connection.startVPNTunnel()
+                    } catch {
+                        self.lastError = error.localizedDescription
+                        done("启动失败: " + error.localizedDescription)
+                        return
+                    }
+                    self.lastError = "已发起连接，等 3 秒…"
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                        let st = m.connection.status
+                        self.status = st
+                        self.send("ping") { reply in
+                            DispatchQueue.main.async {
+                                self.lastError = "状态=" + String(st.rawValue) + " 响应=" + (reply ?? "nil")
+                                done("状态=" + String(st.rawValue) + "(" + TunnelManager.statusName(st) + ") 响应=" + (reply ?? "nil"))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    static func statusName(_ s: NEVPNStatus) -> String {
+        switch s {
+        case .invalid:      return "无效"
+        case .disconnected: return "断开"
+        case .connecting:   return "连接中"
+        case .connected:    return "已连接"
+        case .reasserting:  return "重建中"
+        case .disconnecting:return "断开中"
+        @unknown default:   return "未知"
+        }
+    }
 }

@@ -42,6 +42,9 @@ private func c_pairing_txt(_ buf: UnsafeMutablePointer<CChar>?, _ cap: Int32) ->
 private func c_simulate_location(_ path: UnsafePointer<CChar>?, _ host: UnsafePointer<CChar>?,
                                  _ lat: Double, _ lng: Double) -> Int32
 
+@_silgen_name("pairing_file_check")
+private func c_pairing_file_check(_ path: UnsafePointer<CChar>?) -> Int32
+
 @_silgen_name("clear_location")
 private func c_clear_location(_ path: UnsafePointer<CChar>?, _ host: UnsafePointer<CChar>?) -> Int32
 
@@ -120,6 +123,11 @@ enum Bridge {
     }
 
     /// 恢复真实定位
+    /// 配对文件体检：0=可解析；-1=不存在；-2=空文件；-3=不是合法 pairing 文件
+    static func pairingFileCheck() -> Int32 {
+        return pairingPath.withCString { c_pairing_file_check($0) }
+    }
+
     static func clear(host: String = "10.7.0.1") -> Int32 {
         let path = pairingPath
         return path.withCString { p in
