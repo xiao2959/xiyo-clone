@@ -41,6 +41,7 @@ struct State {
     error: Option<String>,
     tx: Option<Sender<Result<(), String>>>,
     rx: Option<Receiver<Result<(), String>>>,
+    log_path: String,
     identifier: String,           // mDNS 服务实例名（= RpPairingFile::identifier）
     txt: Vec<(String, String)>,   // mDNS TXT 记录
 }
@@ -57,6 +58,7 @@ fn state() -> &'static Mutex<State> {
             error: None,
             tx: None,
             rx: None,
+            log_path: String::new(),
             identifier: String::new(),
             txt: Vec::new(),
         })
@@ -88,6 +90,32 @@ fn load_altirk(save_path: &str) -> Option<[u8; 16]> {
 fn save_altirk(save_path: &str, irk: &[u8; 16]) {
     let hex: String = irk.iter().map(|b| format!("{b:02x}")).collect();
     let _ = std::fs::write(altirk_path(save_path), hex);
+}
+
+// ---------------------------------------------------------------------------
+// 落盘日志：写到 <pairing.plist>.log，配合 App 的 File Sharing 可直接导出
+// ---------------------------------------------------------------------------
+fn plog(msg: &str) {
+    let path = {
+        let s = state().lock().unwrap();
+        s.log_path.clone()
+    };
+    let line = format!("{} {}\n", now_str(), msg);
+    if path.is_empty() {
+        eprintln!("[pairing] {msg}");
+        return;
+    }
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = f.write_all(line.as_bytes());
+    }
+}
+
+fn now_str() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    format!("[{}.{:03}]", now.as_secs(), now.subsec_millis())
 }
 
 fn cstr(p: *const c_char) -> String {
@@ -156,7 +184,10 @@ pub extern "C" fn pairing_start(name: *const c_char, save_path: *const c_char) -
         s.rx = Some(rx);
         s.identifier = identifier;
         s.txt = txt;
+        s.log_path = format!("{save}.log");
     }
+
+    plog(&format!("pairing_start name={host_name} port={port} save={save}"));
 
     // 后台跑：tokio 接管这个 listener
     rt().spawn(async move {
@@ -167,6 +198,8 @@ pub extern "C" fn pairing_start(name: *const c_char, save_path: *const c_char) -
                 return;
             }
         };
+
+        plog("listener ready, waiting for device");
 
         // 等设备连入（60 秒超时）
         let accept = tokio::time::timeout(Duration::from_secs(60), listener.accept()).await;
@@ -182,6 +215,8 @@ pub extern "C" fn pairing_start(name: *const c_char, save_path: *const c_char) -
             }
         };
 
+        plog("device connected");
+
         // 设备发起的配对：responder 角色（pairing_file / host_info 已在 pairing_start 里建好）
         let sock = RpPairingSocket::new_device(stream);
         let mut host = PairableHost::new(sock, host_info);
@@ -189,6 +224,7 @@ pub extern "C" fn pairing_start(name: *const c_char, save_path: *const c_char) -
         // pin_callback：把 6 位码写进共享状态，Swift 轮询取
         let pin_cb = {
             move |pin: String| {
+                plog(&format!("pin generated: {}", pin));
                 {
                     let mut s = state().lock().unwrap();
                     s.pin = Some(pin);
@@ -197,13 +233,20 @@ pub extern "C" fn pairing_start(name: *const c_char, save_path: *const c_char) -
             }
         };
 
+        plog("accept() start: handshake + SRP pair-setup");
         let result = host.accept(&mut pairing_file, pin_cb).await;
+        match &result {
+            Ok(_) => plog("accept() returned Ok"),
+            Err(e) => plog(&format!("accept() returned Err: {e}")),
+        }
         match result {
             Ok(peer) => {
                 // 落盘 pairing file（App Group 容器里的路径由 Swift 传入）
+                plog("writing pairing file...");
                 let saved = pairing_file.write_to_file(&save).await;
                 match saved {
                     Ok(()) => {
+                        plog("pairing file saved OK");
                         let mut s = state().lock().unwrap();
                         s.paired = true;
                         s.peer_udid = Some(peer.remotepairing_udid.clone());
@@ -221,6 +264,10 @@ pub extern "C" fn pairing_start(name: *const c_char, save_path: *const c_char) -
 }
 
 fn finish(r: Result<(), String>) {
+    match &r {
+        Ok(()) => plog("finish: OK"),
+        Err(e) => plog(&format!("finish: ERR {e}")),
+    }
     let mut s = state().lock().unwrap();
     if let Err(e) = &r {
         s.error = Some(e.clone());

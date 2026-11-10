@@ -1,140 +1,202 @@
 //
-//  PairingView.swift —— 纯手机端配对页（对应视频里"输入 App 上显示的 6 位码"）
+//  PairingView.swift
+//  配对页：发起配对 / 显示 6 位码 / 导入现成 pairing.plist
 //
-//  流程（全部在本机完成，不需要电脑）：
-//    1. 调 Rust `pairing_start()` → 在 127.0.0.1 开 listener，返回端口
-//    2. 用 NetService 把这个端口发布成 `_remotepairing-pairable-host._tcp.`
-//       （这就是 idevice 的 PAIRABLE_HOST_SERVICE_TYPE，iOS 会把它当成一台"电脑"）
-//    3. 手机去"设置 → 隐私与安全性 → 开发者模式"里点配对，设备连进来
-//    4. Rust 跑 SRP pair-setup，pin_callback 把 6 位码交给这里显示
-//    5. 配对成功 → pairing.plist 落到 App Group，后续注入用它
+//  两种方式：
+//    A. 本机配对：点「开始配对」→ 显示 6 位码 → 手机上输入 → 等待结果
+//    B. 导入文件：本机配对卡住时，把别处生成的 pairing.plist 导进来
+//
+//  ⚠️ 保持简单：不用复杂 ViewBuilder，避免 swift-frontend 崩溃。
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct PairingView: View {
     @Environment(\.dismiss) private var dismiss
 
-    @State private var pin = "------"
-    @State private var status = "点「开始配对」，然后在手机上打开设置完成配对"
-    @State private var running = false
-    @State private var done = false
-    @State private var timer: Timer?
+    @State private var pin: String = "------"
+    @State private var status: String = "点「开始配对」，然后按手机上的提示操作"
+    @State private var detail: String = ""
+    @State private var running: Bool = false
+    @State private var done: Bool = false
+    @State private var elapsed: Int = 0
+    @State private var showPicker: Bool = false
 
     private let service = BonjourPublisher()
+    @State private var timer: Timer?
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 20) {
-                Text(pin)
-                    .font(.system(size: 46, weight: .bold, design: .monospaced))
-                    .tracking(10)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 18)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 16))
+            List {
+                Section("配对码") {
+                    Text(pin)
+                        .font(.system(size: 40, weight: .bold, design: .monospaced))
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.vertical, 10)
+                }
 
-                Text(status)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .frame(minHeight: 44)
-
-                Button {
-                    start()
-                } label: {
-                    HStack {
-                        if running { ProgressView().tint(.white) }
-                        Text(done ? "已配对" : (running ? "等待设备连接…" : "开始配对"))
+                Section("状态") {
+                    Text(status).font(.footnote)
+                    if detail.isEmpty == false {
+                        Text(detail)
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.secondary)
                     }
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(running || done)
 
-                if done {
-                    Text("配对文件已保存，可以返回首页连接并注入坐标。")
-                        .font(.footnote)
-                        .foregroundStyle(.green)
+                Section {
+                    Button("开始配对") { start() }
+                        .disabled(running)
+                    Button("从文件导入 pairing.plist") { showPicker = true }
+                    if done {
+                        Button("完成") { stop(); dismiss() }
+                    }
                 }
 
-                Spacer()
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("手机上怎么操作：").font(.footnote.bold())
+                Section("手机上的操作") {
                     Text("设置 → 隐私与安全性 → 开发者模式 → 找到本 App → 配对")
                         .font(.footnote)
-                    Text("然后把上面这 6 位码输进去。")
+                    Text("然后输入上面这 6 位数字，再输入锁屏密码。")
                         .font(.footnote)
-                    Text("（iOS 版本不同，入口叫法略有差异）")
-                        .font(.caption).foregroundStyle(.secondary)
+                    Text("如果一直没反应，改用「从文件导入 pairing.plist」。")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
                 }
             }
-            .padding(24)
-            .navigationTitle("配对设备")
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("关闭") { stop(); dismiss() } } }
+            .navigationTitle("配对")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("关闭") { stop(); dismiss() }
+                }
+            }
             .onDisappear { stop() }
+            .sheet(isPresented: $showPicker) {
+                DocumentPicker { url in
+                    importPairing(url)
+                }
+            }
         }
     }
 
-    // MARK: - 动作
+    // MARK: - 本机配对
 
     private func start() {
         running = true
+        elapsed = 0
+        detail = ""
         status = "正在启动本地配对服务…"
 
         let path = Bridge.pairingPath
         let port = Bridge.pairingStart(name: "定位隧道", savePath: path)
-        guard port > 0 else {
+        if port <= 0 {
             running = false
-            status = "启动配对服务失败（端口 = \(port)）"
+            status = "启动配对服务失败（端口 \(port)）"
             return
         }
 
-        // 发布 Bonjour（服务类型/实例名/TXT 都由 Rust 侧给出）
         service.publish(port: UInt16(port))
         status = "已发布配对服务（端口 \(port)），请在手机上完成配对"
 
-        // 每 0.6s 轮询一次：取 PIN / 取结果
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: true) { _ in
-            poll()
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { t in
+            tick(t)
         }
     }
 
-    private func poll() {
+    private func tick(_ t: Timer) {
+        elapsed += 1
+
         if let p = Bridge.pairingTakePin() {
             pin = p
             status = "已生成配对码，请在手机上输入"
         }
 
+        let st = Bridge.pairingStatus() ?? ""
+        if st.isEmpty == false && st != "idle" {
+            detail = st
+        }
+
         let rc = Bridge.pairingWait(timeoutMs: 0)
-        switch rc {
-        case 0:
-            timer?.invalidate(); timer = nil
+        if rc == 0 {
+            t.invalidate()
             running = false
             done = true
             service.stop()
-            let stat = Bridge.pairingStatus() ?? ""
-            status = "配对成功 · \(stat)"
-        case -2:
-            timer?.invalidate(); timer = nil
+            status = "配对成功，配对文件已保存"
+            return
+        }
+        if rc == -2 {
+            t.invalidate()
             running = false
             service.stop()
-            status = "配对失败：\(Bridge.pairingStatus() ?? "未知错误")"
-        default:
-            break
+            status = "配对失败（看下面那行状态）"
+            return
+        }
+
+        if elapsed == 30 && done == false {
+            status = "已等 30 秒。手机上应弹配对确认 → 输 6 位码 → 输锁屏密码。"
+        }
+        if elapsed == 75 && done == false {
+            status = "已等 75 秒，本机配对可能失败。建议改用「从文件导入」。"
+            running = false
+            t.invalidate()
+            service.stop()
         }
     }
 
     private func stop() {
-        timer?.invalidate(); timer = nil
+        timer?.invalidate()
+        timer = nil
         service.stop()
+    }
+
+    // MARK: - 导入配对文件
+
+    private func importPairing(_ url: URL) {
+        let dst = URL(fileURLWithPath: Bridge.pairingPath)
+        do {
+            let data = try Data(contentsOf: url)
+            try data.write(to: dst, options: .atomic)
+            done = true
+            status = "导入成功：" + String(data.count) + " 字节"
+            detail = dst.lastPathComponent
+        } catch {
+            status = "导入失败：" + error.localizedDescription
+        }
+    }
+}
+
+// MARK: - 文件选择器
+
+struct DocumentPicker: UIViewControllerRepresentable {
+    let onPick: (URL) -> Void
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.item], asCopy: true)
+        picker.delegate = context.coordinator
+        picker.allowsMultipleSelection = false
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onPick: onPick)
+    }
+
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        let onPick: (URL) -> Void
+        init(onPick: @escaping (URL) -> Void) { self.onPick = onPick }
+
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            if let u = urls.first { onPick(u) }
+        }
     }
 }
 
 // MARK: - Bonjour 发布
 
-/// 用 NetService 把一个已存在的本地端口发布成 mDNS 服务。
-/// 服务类型 / 实例名 / TXT 全部由 Rust 侧提供（保证和 idevice 的 PairableHost 一致）。
 final class BonjourPublisher: NSObject, NetServiceDelegate {
     private var netService: NetService?
 
@@ -150,10 +212,9 @@ final class BonjourPublisher: NSObject, NetServiceDelegate {
         let x = Bridge.pairingTXT(into: &txtBuf)
 
         let type = t ?? "_remotepairing-pairable-host._tcp."
-        let name = n ?? "\(UUID().uuidString.prefix(8))"
+        let name = n ?? "lab"
         let txtString = x ?? ""
 
-        // "k=v\nk=v" → [String: Data]
         var txt: [String: Data] = [:]
         for line in txtString.split(separator: "\n") {
             let parts = line.split(separator: "=", maxSplits: 1).map(String.init)
@@ -161,7 +222,7 @@ final class BonjourPublisher: NSObject, NetServiceDelegate {
         }
 
         let svc = NetService(domain: "local.", type: type, name: name, port: Int32(port))
-        if !txt.isEmpty {
+        if txt.isEmpty == false {
             svc.setTXTRecord(NetService.data(fromTXTRecord: txt))
         }
         svc.delegate = self
@@ -172,13 +233,5 @@ final class BonjourPublisher: NSObject, NetServiceDelegate {
     func stop() {
         netService?.stop()
         netService = nil
-    }
-
-    func netServiceDidPublish(_ sender: NetService) {
-        print("[bonjour] published \(sender.type) name=\(sender.name) port=\(sender.port)")
-    }
-
-    func netService(_ sender: NetService, didNotPublish errorDict: [String: NSNumber]) {
-        print("[bonjour] publish failed: \(errorDict)")
     }
 }
