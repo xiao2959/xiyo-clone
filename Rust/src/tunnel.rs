@@ -177,17 +177,38 @@ async fn connect_to_device_port(host: &str, port: u16) -> Result<TcpStream, Stri
     }
 }
 
-/// 一次完整的 rppairing 握手：连接 → pair-verify → 让设备开监听
+/// rppairing 的帧格式。
 ///
-/// `host_role = true`  → `originatedBy: "host"`（我方主动连设备）
-/// `host_role = false` → `originatedBy: "device"`（角色翻转的备选）
+/// 库里 `RpPairingSocketProvider` 有两套实现：
+///   - `RpPairingSocket`   → 旧版 JSON 帧（magic "RPPairing" + u16 长度 + JSON）
+///   - `RemoteXpcClient`   → RemoteXPC 帧（mangledTypeName
+///                            "RemotePairing.ControlChannelMessageEnvelope"）
+///
+/// iOS 17+ 的 `_remotepairing._tcp` 走的是 **RemoteXPC**。
+/// 用旧 JSON 帧去连，设备收到就是乱码 → 直接关连接 → "device socket io failed"。
+#[derive(Clone, Copy, Debug)]
+pub enum Framing {
+    Xpc,
+    LegacyJson,
+}
+
+impl Framing {
+    fn name(self) -> &'static str {
+        match self {
+            Framing::Xpc => "XPC",
+            Framing::LegacyJson => "JSON",
+        }
+    }
+}
+
+/// 一次完整的 rppairing 握手：连接 → pair-verify → 让设备开监听
 ///
 /// 返回 (设备开的监听端口, TLS-PSK 密钥)
 async fn remote_pair_handshake(
     host: &str,
     port: u16,
     pairing_path: &str,
-    host_role: bool,
+    framing: Framing,
 ) -> Result<(u16, Vec<u8>), String> {
     let mut pf = RpPairingFile::read_from_file(pairing_path)
         .await
@@ -197,24 +218,42 @@ async fn remote_pair_handshake(
         .await
         .map_err(|e| format!("连 _remotepairing._tcp({port}) 失败: {e}"))?;
 
-    let sock = if host_role {
-        RpPairingSocket::new(stream)
-    } else {
-        RpPairingSocket::new_device(stream)
-    };
-    let mut client = RemotePairingClient::new(sock, "xiyo-lab");
-    client.connect(&mut pf, || async { String::new() }).await.map_err(|e| {
-        format!(
-            "pair-verify 失败({} 角色): {e}",
-            if host_role { "host" } else { "device" }
-        )
-    })?;
+    let tag = framing.name();
 
-    let listener_port = client
-        .create_tcp_listener()
-        .await
-        .map_err(|e| format!("create_tcp_listener 失败: {e}"))?;
-    let key = client.encryption_key().to_vec();
+    let (listener_port, key) = match framing {
+        Framing::Xpc => {
+            let mut xpc = idevice::RemoteXpcClient::new(stream)
+                .await
+                .map_err(|e| format!("[{tag}] RemoteXPC 建连失败: {e}"))?;
+            xpc.do_handshake()
+                .await
+                .map_err(|e| format!("[{tag}] RemoteXPC 握手失败: {e}"))?;
+            let mut client = RemotePairingClient::new(xpc, "xiyo-lab");
+            client
+                .connect(&mut pf, || async { String::new() })
+                .await
+                .map_err(|e| format!("[{tag}] pair-verify 失败: {e}"))?;
+            let lp = client
+                .create_tcp_listener()
+                .await
+                .map_err(|e| format!("[{tag}] create_tcp_listener 失败: {e}"))?;
+            (lp, client.encryption_key().to_vec())
+        }
+        Framing::LegacyJson => {
+            let sock = RpPairingSocket::new(stream);
+            let mut client = RemotePairingClient::new(sock, "xiyo-lab");
+            client
+                .connect(&mut pf, || async { String::new() })
+                .await
+                .map_err(|e| format!("[{tag}] pair-verify 失败: {e}"))?;
+            let lp = client
+                .create_tcp_listener()
+                .await
+                .map_err(|e| format!("[{tag}] create_tcp_listener 失败: {e}"))?;
+            (lp, client.encryption_key().to_vec())
+        }
+    };
+
     Ok((listener_port, key))
 }
 
@@ -242,15 +281,19 @@ pub async fn open_tunnel(
     //    originatedBy 到底该发 "host" 还是 "device"，库里的注释两处方向不同，
     //    与其猜，不如两个都试：先按「我方主动连设备 = host」，
     //    失败再翻转成 "device"。哪个成功，错误信息里会带出来。
-    let (listener_port, key) = match remote_pair_handshake(host, port, pairing_path, true).await {
-        Ok(v) => v,
-        Err(e_host) => {
-            eprintln!("[tunnel] host 角色失败({e_host})，改用 device 角色重试");
-            remote_pair_handshake(host, port, pairing_path, false)
-                .await
-                .map_err(|e_dev| format!("两种角色都失败 —— host: {e_host} ／ device: {e_dev}"))?
-        }
-    };
+    // 先按 iOS 17+ 的 RemoteXPC 帧，失败再退回旧版 JSON 帧
+    let (listener_port, key) =
+        match remote_pair_handshake(host, port, pairing_path, Framing::Xpc).await {
+            Ok(v) => v,
+            Err(e_xpc) => {
+                eprintln!("[tunnel] XPC 帧失败({e_xpc})，改用旧版 JSON 帧重试");
+                remote_pair_handshake(host, port, pairing_path, Framing::LegacyJson)
+                    .await
+                    .map_err(|e_json| {
+                        format!("两种帧格式都失败 —— XPC: {e_xpc} ／ JSON: {e_json}")
+                    })?
+            }
+        };
 
     // 5) 连到那个监听端口
     let lstream = connect_to_device_port(host, listener_port)
