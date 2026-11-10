@@ -22,8 +22,17 @@ struct DirectInjectView: View {
     @State private var showPicker = false
     @State private var showPairing = false
     @State private var busy = false
+    @State private var tunnelReady = false
     @State private var log: [String] = []
     @State private var status = "还没建隧道"
+
+    /// 根据当前进度提示下一步该点哪个
+    private var nextStepHint: String {
+        if pairingURL == nil {
+            return "① 还没配对文件 —— 点上面「生成配对文件（App 内配对）」"
+        }
+        return "② 配对文件已就绪 —— 点「① 建立隧道」"
+    }
 
     var body: some View {
         NavigationStack {
@@ -59,34 +68,52 @@ struct DirectInjectView: View {
                         .foregroundStyle(busy ? Color.orange : Color.primary)
                 }
 
-                Section("操作") {
+                Section("操作（按 1 → 2 → 3 顺序）") {
                     Button {
                         Task { await openTunnel() }
                     } label: {
-                        Label("建立隧道", systemImage: "link")
+                        HStack {
+                            Text("①").foregroundStyle(.secondary)
+                            Label("建立隧道", systemImage: "link")
+                        }
                     }
-                    .disabled(busy || pairingURL == nil)
+                    .disabled(busy || pairingURL == nil || tunnelReady)
 
                     Button {
                         Task { await doInject() }
                     } label: {
-                        Label("注入当前坐标", systemImage: "location.fill")
+                        HStack {
+                            Text("②").foregroundStyle(.secondary)
+                            Label("注入当前坐标", systemImage: "location.fill")
+                        }
                     }
-                    .disabled(busy || target == nil)
+                    .disabled(busy || target == nil || tunnelReady == false)
 
                     Button {
                         Task { await doClear() }
                     } label: {
-                        Label("清除模拟位置", systemImage: "arrow.uturn.backward")
+                        HStack {
+                            Text("③").foregroundStyle(.secondary)
+                            Label("清除模拟位置", systemImage: "arrow.uturn.backward")
+                        }
                     }
-                    .disabled(busy)
+                    .disabled(busy || tunnelReady == false)
 
                     Button {
                         Task { await showServices() }
                     } label: {
-                        Label("查看 RSD 服务列表", systemImage: "list.bullet")
+                        HStack {
+                            Text("ⓘ").foregroundStyle(.secondary)
+                            Label("查看 RSD 服务列表", systemImage: "list.bullet")
+                        }
                     }
-                    .disabled(busy)
+                    .disabled(busy || tunnelReady == false)
+
+                    if tunnelReady == false {
+                        Text(nextStepHint)
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                    }
                 }
 
                 if let t = target {
@@ -172,7 +199,8 @@ struct DirectInjectView: View {
         status = "正在建立隧道…"
         append("开始建隧道")
         let r = await TunnelBridge.open(pairingPath: url.path)
-        status = r.ok ? "隧道已建立" : "失败：\(r.codeText)"
+        tunnelReady = r.ok
+        status = r.ok ? "隧道已建立，可以注入了" : "失败：\(r.codeText)"
         append("\(r.ok ? "✅" : "❌") [\(r.code)] \(r.message)")
         busy = false
     }
@@ -183,6 +211,7 @@ struct DirectInjectView: View {
         status = "正在注入…"
         append("注入 \(String(format: "%.7f, %.7f", t.latitude, t.longitude))")
         let r = await TunnelBridge.inject(lat: t.latitude, lon: t.longitude)
+        if r.code == Int32(TunnelBridge.Code.noTunnel.rawValue) { tunnelReady = false }
         status = r.ok ? "注入成功" : "失败：\(r.codeText)"
         append("\(r.ok ? "✅" : "❌") [\(r.code)] \(r.message)")
         busy = false
