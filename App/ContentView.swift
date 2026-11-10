@@ -39,6 +39,10 @@ struct ContentView: View {
     /// 地图视野持久化（View 重建也不会跳回原点）
     @StateObject private var mapState = MapState()
 
+    /// 授权（卡密 + 到期）
+    @StateObject private var license = LicenseManager()
+    @State private var showLicense: Bool = false
+
     @State private var picked: CLLocationCoordinate2D?
     @State private var injectPoint: CLLocationCoordinate2D?
     @State private var note: String = "在地图上点一下，选目标位置"
@@ -76,12 +80,24 @@ struct ContentView: View {
             .navigationTitle("定位注入")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showSearch = true
-                    } label: {
-                        Image(systemName: "magnifyingglass")
+                    HStack(spacing: 14) {
+                        Button {
+                            showLicense = true
+                        } label: {
+                            Image(systemName: license.isUsable
+                                  ? "checkmark.shield.fill" : "lock.shield.fill")
+                                .foregroundStyle(license.isUsable ? .green : .orange)
+                        }
+                        Button {
+                            showSearch = true
+                        } label: {
+                            Image(systemName: "magnifyingglass")
+                        }
                     }
                 }
+            }
+            .sheet(isPresented: $showLicense) {
+                LicenseView(license: license)
             }
             .onAppear { stikInstalled = checkStik() }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
@@ -151,6 +167,34 @@ struct ContentView: View {
 
     private var infoList: some View {
         List {
+            // 授权状态（对齐官方版「授权」页入口）
+            Section("授权") {
+                HStack {
+                    Text(license.state.text)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(license.isUsable ? Color.green : Color.orange)
+                    Spacer()
+                    Text(license.editionText)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                if license.isUsable {
+                    Text(license.remainingText)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("未激活或已过期，请点右上角锁图标输入卡密")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                }
+                Button {
+                    showLicense = true
+                } label: {
+                    Label(license.isUsable ? "查看授权详情" : "输入卡密激活",
+                          systemImage: "key.fill")
+                }
+            }
+
             // 中文结果常驻显示：一眼分辨成功/失败
             Section("本次结果") {
                 HStack {
@@ -217,7 +261,12 @@ struct ContentView: View {
                         Text("注入到手机").fontWeight(.semibold)
                     }
                 }
-                .disabled(injectPoint == nil)
+                .disabled(injectPoint == nil || license.isUsable == false)
+                if license.isUsable == false {
+                    Text("⚠️ 授权未激活或已过期，无法注入。先点右上角锁图标激活。")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                }
 
                 Button {
                     sendClear()

@@ -34,7 +34,7 @@ targets:
         excludes:
           - "Info.plist"
           - "App.entitlements"
-          # 旧链路文件：不再参与编译（保留在仓库里，便于以后恢复）
+          # 旧链路文件（保留在仓库，便于以后恢复）
           - "Bridge"
           - "TunnelManager.swift"
           - "DiagView.swift"
