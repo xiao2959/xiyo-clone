@@ -93,6 +93,90 @@ pub async fn probe_rp_port(host: &str) -> Option<u16> {
     None
 }
 
+/// 通过 usbmuxd（127.0.0.1:27015）连接设备的某个 TCP 端口。
+///
+/// 设备上的 `remotepairingd` 不一定直接绑在 loopback 上，有时只能经
+/// usbmuxd 转发访问。StikDebug 二进制里 usbmuxd 出现 4587 次，
+/// 说明这是它实际走的路子 —— 我们加一层兜底。
+///
+/// usbmuxd 协议：
+///   请求 = [4B 长度 LE][4B 版本=1][4B 类型=8(Plist)][4B tag] + plist
+///   响应 = 同样的头 + plist {"MessageType":"Result","Number":0}
+/// 成功后该 socket 即变成到设备端口的透明通道。
+pub async fn usbmuxd_connect(port: u16) -> Result<TcpStream, String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let mut s = tokio::time::timeout(
+        Duration::from_secs(4),
+        TcpStream::connect("127.0.0.1:27015"),
+    )
+    .await
+    .map_err(|_| "连 usbmuxd(27015) 超时".to_string())?
+    .map_err(|e| format!("连 usbmuxd(27015) 失败: {e}"))?;
+
+    let req = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
+<plist version=\"1.0\"><dict>\
+<key>MessageType</key><string>Connect</string>\
+<key>DeviceID</key><integer>1</integer>\
+<key>PortNumber</key><integer>{}</integer>\
+<key>ClientVersionString</key><string>xiyo-lab</string>\
+</dict></plist>",
+        port
+    );
+
+    let mut pkt = Vec::with_capacity(16 + req.len());
+    pkt.extend_from_slice(&((16 + req.len()) as u32).to_le_bytes());
+    pkt.extend_from_slice(&1u32.to_le_bytes());
+    pkt.extend_from_slice(&8u32.to_le_bytes());
+    pkt.extend_from_slice(&1u32.to_le_bytes());
+    pkt.extend_from_slice(req.as_bytes());
+
+    s.write_all(&pkt)
+        .await
+        .map_err(|e| format!("usbmuxd 写请求失败: {e}"))?;
+
+    let mut hdr = [0u8; 16];
+    tokio::time::timeout(Duration::from_secs(4), s.read_exact(&mut hdr))
+        .await
+        .map_err(|_| "usbmuxd 响应超时".to_string())?
+        .map_err(|e| format!("usbmuxd 读响应失败: {e}"))?;
+
+    let total = u32::from_le_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]) as usize;
+    if total < 16 || total > 8192 {
+        return Err(format!("usbmuxd 响应长度异常: {total}"));
+    }
+    let body_len = total - 16;
+    let mut body = vec![0u8; body_len];
+    if body_len > 0 {
+        s.read_exact(&mut body)
+            .await
+            .map_err(|e| format!("usbmuxd 读 body 失败: {e}"))?;
+    }
+    let text = String::from_utf8_lossy(&body).to_string();
+    if text.contains("<key>Number</key><integer>0</integer>") == false {
+        let short: String = text.chars().take(160).collect();
+        return Err(format!("usbmuxd 拒绝端口 {port}: {short}"));
+    }
+    Ok(s)
+}
+
+/// 先试直连，失败再走 usbmuxd
+async fn connect_to_device_port(host: &str, port: u16) -> Result<TcpStream, String> {
+    let addr = format!("{}:{}", host, port);
+    match tokio::time::timeout(Duration::from_secs(4), TcpStream::connect(&addr)).await {
+        Ok(Ok(s)) => Ok(s),
+        Ok(Err(e)) => match usbmuxd_connect(port).await {
+            Ok(s) => Ok(s),
+            Err(ue) => Err(format!("直连 {addr} 失败({e})；usbmuxd 也失败({ue})")),
+        },
+        Err(_) => match usbmuxd_connect(port).await {
+            Ok(s) => Ok(s),
+            Err(ue) => Err(format!("直连 {addr} 超时；usbmuxd 也失败({ue})")),
+        },
+    }
+}
+
 /// 打开完整隧道到 RSD
 ///
 /// - `host`：设备地址（本机上通常是 127.0.0.1）
@@ -118,11 +202,9 @@ pub async fn open_tunnel(
     };
 
     // 3) 连接 + pair-verify（用已有配对，不需要 PIN）
-    let addr = format!("{}:{}", host, port);
-    let stream = tokio::time::timeout(Duration::from_secs(6), TcpStream::connect(&addr))
+    let stream = connect_to_device_port(host, port)
         .await
-        .map_err(|_| format!("连接 {addr} 超时"))?
-        .map_err(|e| format!("连接 {addr} 失败: {e}"))?;
+        .map_err(|e| format!("连 _remotepairing._tcp({port}) 失败: {e}"))?;
 
     let sock = RpPairingSocket::new_device(stream);
     let mut client = RemotePairingClient::new(sock, "xiyo-lab");
@@ -139,11 +221,9 @@ pub async fn open_tunnel(
     let key = client.encryption_key().to_vec();
 
     // 5) 连到那个监听端口
-    let laddr = format!("{}:{}", host, listener_port);
-    let lstream = tokio::time::timeout(Duration::from_secs(6), TcpStream::connect(&laddr))
+    let lstream = connect_to_device_port(host, listener_port)
         .await
-        .map_err(|_| format!("连接监听端口 {laddr} 超时"))?
-        .map_err(|e| format!("连接监听端口 {laddr} 失败: {e}"))?;
+        .map_err(|e| format!("连监听端口 {listener_port} 失败: {e}"))?;
 
     // 6) TLS-PSK + CDTunnel
     let tunnel = connect_tls_psk_tunnel_native(lstream, &key)

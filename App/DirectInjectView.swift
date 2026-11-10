@@ -196,9 +196,20 @@ struct DirectInjectView: View {
     private func openTunnel() async {
         guard let url = pairingURL else { return }
         busy = true
+
+        // ① 用 Bonjour 解析 _remotepairing._tcp 的真实端口
+        //    （设备上的端口不固定，硬编码探测找不到）
+        status = "正在解析配对端口…"
+        append("① 浏览 _remotepairing._tcp")
+        let (port, note) = await RpPortResolver.shared.resolve()
+        append(note)
+
+        // ② 建隧道
         status = "正在建立隧道…"
-        append("开始建隧道")
-        let r = await TunnelBridge.open(pairingPath: url.path)
+        let portText = port.map { String($0) } ?? "自动探测"
+        append("② 建立隧道（端口 \(portText)）")
+        let r = await TunnelBridge.open(rpPort: port.map { Int32($0) } ?? 0,
+                                       pairingPath: url.path)
         tunnelReady = r.ok
         status = r.ok ? "隧道已建立，可以注入了" : "失败：\(r.codeText)"
         append("\(r.ok ? "✅" : "❌") [\(r.code)] \(r.message)")
