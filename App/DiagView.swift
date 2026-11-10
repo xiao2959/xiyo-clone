@@ -88,6 +88,24 @@ struct DiagView: View {
         }
     }
 
+    /// 配对文件体检：存在性 + 大小 + Rust 能否解析
+    private func pairFileText() -> String {
+        let path = Bridge.pairingPath
+        let fm = FileManager.default
+        if fm.fileExists(atPath: path) == false { return "不存在" }
+        var size = 0
+        if let attrs = try? fm.attributesOfItem(atPath: path) {
+            if let n = attrs[.size] as? Int { size = n }
+        }
+        let rc = Bridge.pairingFileCheck()
+        var tag = "rc=" + String(rc)
+        if rc == 0 { tag = "可解析" }
+        if rc == -1 { tag = "读取失败" }
+        if rc == -2 { tag = "空文件" }
+        if rc == -3 { tag = "格式不对" }
+        return tag + " " + String(size) + "B"
+    }
+
     private func rebuild() {
         running = true
         errText = "重建中…"
