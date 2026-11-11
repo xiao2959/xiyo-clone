@@ -54,13 +54,16 @@ pub struct TunnelDiag {
     pub listener_port: u16,
     pub service_count: usize,
     pub has_location_service: bool,
+    /// 服务表里名字含 location / simulate 的候选（逗号分隔）
+    pub location_candidates: String,
 }
 
 impl TunnelDiag {
     pub fn to_json(&self) -> String {
         format!(
             "{{\"client\":\"{}\",\"server\":\"{}\",\"mtu\":{},\"rsdPort\":{},\
-             \"rpPort\":{},\"listenerPort\":{},\"services\":{},\"location\":{}}}",
+             \"rpPort\":{},\"listenerPort\":{},\"services\":{},\"location\":{},\
+             \"locationCandidates\":\"{}\"}}",
             self.client_ipv6,
             self.server_ipv6,
             self.mtu,
@@ -68,7 +71,8 @@ impl TunnelDiag {
             self.rp_port,
             self.listener_port,
             self.service_count,
-            self.has_location_service
+            self.has_location_service,
+            self.location_candidates
         )
     }
 }
@@ -420,6 +424,18 @@ pub async fn open_tunnel(
         listener_port,
         service_count: services.len(),
         has_location_service: services.contains_key("com.apple.coredevice.locationservice"),
+        location_candidates: {
+            let mut v: Vec<String> = services
+                .keys()
+                .filter(|k| {
+                    let lk = k.to_lowercase();
+                    lk.contains("location") || lk.contains("simulate")
+                })
+                .cloned()
+                .collect();
+            v.sort();
+            v.join(",")
+        },
     };
 
     Ok(OpenTunnel {
@@ -427,6 +443,50 @@ pub async fn open_tunnel(
         services,
         diag,
     })
+}
+
+/// 找定位服务：先精确，再按名字模糊匹配。
+///
+/// 实测 iOS 27 的 RSD 表里 76 个服务几乎全是 `*.shim.remote` 形式，
+/// `com.apple.coredevice.locationservice` 这个名字并不存在。
+pub fn find_location_service(t: &OpenTunnel) -> Option<(String, u16)> {
+    // 1) 精确
+    for key in [
+        "com.apple.coredevice.locationservice",
+        "com.apple.dt.simulatelocation",
+        "com.apple.coredevice.locationservice.shim.remote",
+        "com.apple.dt.simulatelocation.shim.remote",
+    ] {
+        if let Some(p) = t.services.get(key) {
+            return Some((key.to_string(), *p));
+        }
+    }
+    // 2) 模糊：名字里含 location 或 simulate
+    let mut hits: Vec<(&String, &u16)> = t
+        .services
+        .iter()
+        .filter(|(k, _)| {
+            let lk = k.to_lowercase();
+            lk.contains("location") || lk.contains("simulate")
+        })
+        .collect();
+    hits.sort_by(|a, b| a.0.cmp(b.0));
+    hits.first().map(|(k, p)| ((*k).clone(), **p))
+}
+
+/// 列出所有含 location / simulate 的服务名（诊断用）
+pub fn location_candidates(t: &OpenTunnel) -> Vec<String> {
+    let mut v: Vec<String> = t
+        .services
+        .keys()
+        .filter(|k| {
+            let lk = k.to_lowercase();
+            lk.contains("location") || lk.contains("simulate")
+        })
+        .cloned()
+        .collect();
+    v.sort();
+    v
 }
 
 /// 在 RSD 服务表里找目标服务端口

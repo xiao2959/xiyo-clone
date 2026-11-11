@@ -145,10 +145,19 @@ where
         .as_mut()
         .ok_or((rc::NO_TUNNEL, "隧道还没建立，先调 tunnel_open".to_string()))?;
 
-    let port = port_of(tunnel, "com.apple.coredevice.locationservice").ok_or((
-        rc::NO_SERVICE,
-        "RSD 服务表里没有 com.apple.coredevice.locationservice".to_string(),
-    ))?;
+    // 先精确、再模糊匹配（iOS 27 的表里全是 *.shim.remote 名字）
+    let (svc_name, port) = crate::tunnel::find_location_service(tunnel).ok_or_else(|| {
+        let cands = crate::tunnel::location_candidates(tunnel);
+        (
+            rc::NO_SERVICE,
+            if cands.is_empty() {
+                format!("RSD 表共 {} 个服务，里面没有任何含 location/simulate 的", tunnel.services.len())
+            } else {
+                format!("找到候选但都不匹配: {}", cands.join(", "))
+            },
+        )
+    })?;
+    let _ = &svc_name;
 
     let result: Result<String, (i32, String)> = rt().block_on(async {
         use idevice::provider::RsdProvider;

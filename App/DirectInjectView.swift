@@ -190,7 +190,7 @@ struct DirectInjectView: View {
         let f = DateFormatter()
         f.dateFormat = "HH:mm:ss"
         log.insert("[\(f.string(from: Date()))] \(s)", at: 0)
-        if log.count > 60 { log.removeLast() }
+        if log.count > 200 { log.removeLast() }
     }
 
     private func openTunnel() async {
@@ -273,10 +273,18 @@ struct DirectInjectView: View {
     private func showServices() async {
         busy = true
         let s = await TunnelBridge.services()
-        append("RSD 服务列表:")
-        for line in s.split(separator: "\n").prefix(40) {
-            append("  \(line)")
+        let all = s.split(separator: "\n").map(String.init)
+        append("RSD 服务列表（共 \(all.count) 个）:")
+        // 先列出含 location / simulate 的，再列其余（都进日志）
+        let hits = all.filter { $0.lowercased().contains("location") || $0.lowercased().contains("simulate") }
+        if hits.isEmpty {
+            append("  ⚠️ 没有含 location/simulate 的服务")
+        } else {
+            append("  ★ 含 location/simulate 的:")
+            for h in hits { append("    " + h) }
         }
+        for line in all { append("  " + line) }
+        append("（以上 \(all.count) 条已全部列出）")
         busy = false
     }
 }
