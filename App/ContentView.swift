@@ -1,17 +1,12 @@
 //
-//  ContentView.swift —— 一键注入 + 坐标模式校准（D 轮）
+//  ContentView.swift —— CDPro 主界面
 //
-//  用户反馈：注入后仍偏几百米。
-//  原因待定：苹果地图在中国区可能是 GCJ-02 也可能是 WGS-84，
-//            StikDebug 深链不换算、直接把 lat/lon 传给注入接口。
-//            两种可能方向相反，猜错就反向偏 ~500 米。
+//  布局对齐官方版：底部三个 Tab（首页 / 地图 / 验证）
+//    首页：问候 + 三个状态灯 + 三个大按钮 + 功能列表
+//    地图：搜索条 + 地图 + 模拟/清除/收藏
+//    验证：授权状态与卡密
 //
-//  解决：给用户三个模式，一次测准并记住选择。
-//    ① 自动换算 GCJ→WGS（默认）
-//    ② 原样注入（MapKit 若已是 WGS 就选这个）
-//    ③ 反向换算 WGS→GCJ
-//
-//  用户视角：地图点选 → 点「注入」→ 完成；偏了就切一下模式。
+//  设计原则：一屏只做一件事，按钮大、字少、状态用颜色表达。
 //
 
 import SwiftUI
@@ -36,415 +31,571 @@ enum InjectMode: String, CaseIterable, Identifiable {
 }
 
 struct ContentView: View {
-    /// 地图视野持久化（View 重建也不会跳回原点）
-    @StateObject private var mapState = MapState()
 
-    /// 授权（卡密 + 到期）
+    // 共享状态
+    @StateObject private var tunnel = TunnelModel()
     @StateObject private var license = LicenseManager()
-    @State private var showLicense: Bool = false
-    @State private var showDirect: Bool = false
+    @StateObject private var mapState = MapState()
+    @StateObject private var search = SearchModel()
 
+    // 选点
     @State private var picked: CLLocationCoordinate2D?
     @State private var injectPoint: CLLocationCoordinate2D?
-    @State private var note: String = "在地图上点一下，选目标位置"
-    @State private var status: String = ""
-    @State private var stikInstalled: Bool = false
-    @State private var showModeHelp: Bool = false
-
-    // 注入结果（中文常驻显示 + 返回时确认）
-    @State private var lastResultOK: Bool?
-    @State private var lastResultText: String = ""
-    @State private var showResultSheet: Bool = false
-    @State private var pendingCoordText: String = ""
-    @State private var wasInBackground: Bool = false
-
-    // 找地方：搜索 / 手动输经纬度
-    @StateObject private var search = SearchModel()
-    @State private var showSearch: Bool = false
-    @State private var coordText: String = ""
-    @State private var showCoordInput: Bool = false
-    @State private var locating: Bool = false
-    private let locator = CLLocationManager()
-
     @AppStorage("inject_mode") private var modeRaw: String = InjectMode.autoGCJ.rawValue
 
-    private var mode: InjectMode {
-        InjectMode(rawValue: modeRaw) ?? .autoGCJ
-    }
+    // 界面
+    @State private var showSearch = false
+    @State private var showLicense = false
+    @State private var showPairing = false
+    @State private var showDiagnostics = false
+    @State private var showCoordInput = false
+    @State private var showDisclaimer = false
+    @State private var showFavorites = false
+    @State private var coordText = ""
+    @State private var toast = ""
+
+    private var mode: InjectMode { InjectMode(rawValue: modeRaw) ?? .autoGCJ }
 
     var body: some View {
+        TabView {
+            homeTab
+                .tabItem { Label("首页", systemImage: "house.fill") }
+            mapTab
+                .tabItem { Label("地图", systemImage: "location.fill") }
+            verifyTab
+                .tabItem { Label("验证", systemImage: "checkmark.seal.fill") }
+        }
+        .tint(.blue)
+        .task {
+            tunnel.refresh()
+            // 有配对文件就悄悄把隧道接上，用户不用管
+            if tunnel.hasPairing && tunnel.tunnelReady == false {
+                await tunnel.connect()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(
+            for: UIApplication.willEnterForegroundNotification)) { _ in
+            tunnel.refresh()
+        }
+        .sheet(isPresented: $showSearch) {
+            SearchSheet(search: search) { c in jump(to: c) }
+        }
+        .sheet(isPresented: $showLicense) {
+            LicenseView(license: license)
+        }
+        .sheet(isPresented: $showPairing) {
+            PairingView().onDisappear { tunnel.refresh() }
+        }
+        .sheet(isPresented: $showDiagnostics) {
+            DirectInjectView(target: injectPoint)
+        }
+        .sheet(isPresented: $showFavorites) {
+            FavoritesSheet { loc in jump(to: loc.coordinate) }
+        }
+        .sheet(isPresented: $showDisclaimer) {
+            DisclaimerSheet()
+        }
+        .alert("输入经纬度", isPresented: $showCoordInput) {
+            TextField("36.7069, 119.1618", text: $coordText)
+                .keyboardType(.numbersAndPunctuation)
+            Button("跳转") {
+                if let c = CoordInput.parse(coordText) { jump(to: c) }
+                else { toast = "格式不对，要：纬度, 经度" }
+            }
+            Button("取消", role: .cancel) {}
+        }
+    }
+
+    // MARK: - 首页
+
+    private var homeTab: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                mapArea.frame(height: 320)
-                infoList
+            ScrollView {
+                VStack(spacing: 16) {
+                    greetingCard
+                    statusPills
+                    actionTiles
+                    menuCard
+                    if let t = tunnel.lastInjected, t.isEmpty == false {
+                        lastInjectCard(t)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 28)
             }
-            .navigationTitle("定位注入")
+            .background(Color(.systemGroupedBackground))
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Text("CDPro").font(.headline)
+                }
                 ToolbarItem(placement: .topBarTrailing) {
-                    HStack(spacing: 14) {
-                        Button {
-                            showLicense = true
-                        } label: {
-                            Image(systemName: license.isUsable
-                                  ? "checkmark.shield.fill" : "lock.shield.fill")
-                                .foregroundStyle(license.isUsable ? .green : .orange)
-                        }
-                        Button {
-                            showSearch = true
-                        } label: {
-                            Image(systemName: "magnifyingglass")
-                        }
+                    Button { showLicense = true } label: {
+                        Image(systemName: license.isUsable
+                              ? "checkmark.shield.fill" : "lock.shield.fill")
+                            .foregroundStyle(license.isUsable ? .green : .orange)
                     }
                 }
-            }
-            .sheet(isPresented: $showLicense) {
-                LicenseView(license: license)
-            }
-            .sheet(isPresented: $showDirect) {
-                DirectInjectView(target: injectPoint)
-            }
-            .onAppear { stikInstalled = checkStik() }
-            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
-                // 只有"刚注入过、还没确认结果"才需要在回来时问
-                if pendingCoordText.isEmpty == false { wasInBackground = true }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
-                if wasInBackground && pendingCoordText.isEmpty == false {
-                    wasInBackground = false
-                    // 稍等，让 StikDebug 的弹窗先消失
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                        showResultSheet = true
-                    }
-                }
-            }
-            .sheet(isPresented: $showResultSheet) {
-                ResultSheet(coord: pendingCoordText) { ok in
-                    lastResultOK = ok
-                    lastResultText = ok ? "模拟成功" : "模拟失败"
-                    pendingCoordText = ""
-                }
-            }
-            .sheet(isPresented: $showSearch) {
-                SearchSheet(search: search) { c in
-                    jump(to: c)
-                }
-            }
-            .alert("输入经纬度", isPresented: $showCoordInput) {
-                TextField("36.7069, 119.1618", text: $coordText)
-                Button("跳转") {
-                    if let c = CoordInput.parse(coordText) { jump(to: c) }
-                    else { status = "坐标格式不对，要：纬度, 经度" }
-                }
-                Button("取消", role: .cancel) {}
             }
         }
     }
 
-    /// 跳到指定坐标并直接把它设为目标（省得跳完还要再点一下地图）
-    private func jump(to c: CLLocationCoordinate2D) {
-        mapState.requestJump(to: c)
-        applyPick(c)
-        status = "已跳到 " + format(c)
-    }
-
-    /// 回到当前真实位置
-    private func goCurrent() {
-        locator.requestWhenInUseAuthorization()
-        guard let c = locator.location?.coordinate else {
-            status = "还没拿到定位，稍等再点一次"
-            return
+    private var greetingCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(greetingTitle)
+                .font(.title3.bold())
+            Text(greetingSub)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
         }
-        // 回到当前位置只移动地图，不覆盖已选的目标点
-        mapState.requestJump(to: c)
-        status = "已回到当前位置（目标点保留）"
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18)
+        .background(Color(.secondarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 16))
     }
 
-    // MARK: - 地图（原生 MKMapView，不来回跳）
+    private var greetingTitle: String {
+        let h = Calendar.current.component(.hour, from: Date())
+        if h < 6 { return "夜深了，注意休息" }
+        if h < 12 { return "早上好" }
+        if h < 14 { return "中午好" }
+        if h < 18 { return "下午好" }
+        return "晚上好"
+    }
 
-    private var mapArea: some View {
-        NativeMapView(state: mapState, picked: picked) { c in
-            applyPick(c)
+    private var greetingSub: String {
+        if tunnel.tunnelReady { return "隧道已连接，可以直接模拟位置" }
+        if tunnel.hasPairing { return "点「启动隧道」开始使用" }
+        return "先导入配对文件，再启动隧道"
+    }
+
+    private var statusPills: some View {
+        HStack(spacing: 10) {
+            pill(title: "配对文件", on: tunnel.hasPairing)
+            pill(title: "VPN", on: tunnel.vpnUp ?? tunnel.tunnelReady)
+            pill(title: "隧道", on: tunnel.tunnelReady)
         }
     }
 
-    // MARK: - 信息
-
-    private var infoList: some View {
-        List {
-            // 授权状态（对齐官方版「授权」页入口）
-            Section("授权") {
-                HStack {
-                    Text(license.state.text)
-                        .fontWeight(.semibold)
-                        .foregroundStyle(license.isUsable ? Color.green : Color.orange)
-                    Spacer()
-                    Text(license.editionText)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                if license.isUsable {
-                    Text(license.remainingText)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("未激活或已过期，请点右上角锁图标输入卡密")
-                        .font(.footnote)
-                        .foregroundStyle(.orange)
-                }
-                Button {
-                    showLicense = true
-                } label: {
-                    Label(license.isUsable ? "查看授权详情" : "输入卡密激活",
-                          systemImage: "key.fill")
-                }
-            }
-
-            // 中文结果常驻显示：一眼分辨成功/失败
-            Section("本次结果") {
-                HStack {
-                    Text(resultHeadline)
-                        .fontWeight(.semibold)
-                        .foregroundStyle(resultColor)
-                    Spacer()
-                    if lastResultOK != nil {
-                        Button("清除") {
-                            lastResultOK = nil
-                            lastResultText = ""
-                        }
-                        .font(.footnote)
-                    }
-                }
-                if lastResultText.isEmpty == false {
-                    Text(lastResultText + " · " + injectText)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("点「注入到手机」后会跳到 StikDebug 确认，回来这里标记结果。")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Section("找地方") {
-                Button {
-                    showSearch = true
-                } label: {
-                    Label("搜索地名 / 小区 / 学校", systemImage: "magnifyingglass")
-                }
-                Button {
-                    coordText = ""
-                    showCoordInput = true
-                } label: {
-                    Label("输入经纬度跳转", systemImage: "number")
-                }
-                Button {
-                    goCurrent()
-                } label: {
-                    Label("回到当前位置", systemImage: "location")
-                }
-                Text("搜到后自动跳过去并放好目标点，不用手动拖地图。")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("选点") {
-                row("地图坐标 GCJ-02", pickedText)
-                row("注入坐标 WGS-84", injectText, highlight: true)
-                row("说明", note)
-                Text("💡 长按地图选位置（和官方版一致），也可以单击。")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section {
-                Button {
-                    inject()
-                } label: {
-                    HStack {
-                        Image(systemName: "location.fill")
-                        Text("注入到手机").fontWeight(.semibold)
-                    }
-                }
-                .disabled(injectPoint == nil || license.isUsable == false)
-                if license.isUsable == false {
-                    Text("⚠️ 授权未激活或已过期，无法注入。先点右上角锁图标激活。")
-                        .font(.footnote)
-                        .foregroundStyle(.orange)
-                }
-
-                Button {
-                    sendClear()
-                } label: {
-                    Label("恢复真实定位", systemImage: "arrow.uturn.backward")
-                }
-
-                Button {
-                    showDirect = true
-                } label: {
-                    Label("直连注入（内置隧道）", systemImage: "bolt.horizontal.circle")
-                }
-            } footer: {
-                if status.isEmpty == false {
-                    Text(status).font(.footnote)
-                }
-            }
-
-            Section("坐标模式（偏了就换一个试试）") {
-                Picker("坐标模式", selection: $modeRaw) {
-                    ForEach(InjectMode.allCases) { m in
-                        Text(m.rawValue).tag(m.rawValue)
-                    }
-                }
-                .pickerStyle(.inline)
-                .onChange(of: modeRaw) { _ in
-                    if let p = picked { applyPick(p) }
-                }
-
-                Text(mode.hint).font(.footnote).foregroundStyle(.secondary)
-
-                Button("怎么选？点我看一句话说明") {
-                    showModeHelp.toggle()
-                }
+    private func pill(title: String, on: Bool) -> some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(on ? Color.green : Color.orange)
+                .frame(width: 8, height: 8)
+            Text(title)
                 .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(Color(.secondarySystemGroupedBackground), in: Capsule())
+    }
 
-                if showModeHelp {
-                    Text("点一个明显地标 → 注入 → 看手机地图蓝点。\n"
-                         + "蓝点在目标西边/南边约 500 米 → 切「原样注入」。\n"
-                         + "蓝点往反方向偏 → 切「反向换算」。\n"
-                         + "选对一次会自动记住，以后不用再改。")
-                        .font(.footnote)
-                        .foregroundStyle(.orange)
-                }
+    private var actionTiles: some View {
+        HStack(spacing: 12) {
+            tile(icon: "qrcode.viewfinder",
+                 tint: .blue,
+                 title: "导入配对",
+                 subtitle: tunnel.hasPairing ? "已导入" : "未导入") {
+                showPairing = true
             }
+            tile(icon: "lock.open.fill",
+                 tint: .teal,
+                 title: "VPN",
+                 subtitle: (tunnel.vpnUp ?? tunnel.tunnelReady) ? "已开启" : "未开启") {
+                toast = "请打开 LocalDevVPN 并点「连接」"
+            }
+            tile(icon: "play.fill",
+                 tint: .green,
+                 title: tunnel.busy ? "连接中" : "启动隧道",
+                 subtitle: tunnel.tunnelReady ? "已连接" : "未连接") {
+                Task { await tunnel.connect() }
+            }
+        }
+    }
 
-            if stikInstalled == false {
-                Section("需要先装 StikDebug") {
-                    Text("本 App 负责选点和换算，实际注入由 StikDebug 完成。")
-                        .font(.footnote)
-                    Text("安装：Safari 打开 http://103.119.2.243/apps/StikDebug-3.2.2.ipa ，用全能签签名安装。")
+    private func tile(icon: String,
+                      tint: Color,
+                      title: String,
+                      subtitle: String,
+                      action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 26))
+                    .foregroundStyle(tint)
+                    .frame(height: 30)
+                Text(title).font(.subheadline.weight(.medium))
+                Text(subtitle).font(.caption).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 18)
+            .background(Color(.secondarySystemGroupedBackground),
+                        in: RoundedRectangle(cornerRadius: 16))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var menuCard: some View {
+        VStack(spacing: 0) {
+            menuRow(icon: "doc.badge.gearshape", title: "生成配对文件", tint: .blue) {
+                showPairing = true
+            }
+            Divider().padding(.leading, 52)
+            menuRow(icon: "stethoscope", title: "诊断与日志", tint: .purple) {
+                showDiagnostics = true
+            }
+            Divider().padding(.leading, 52)
+            menuRow(icon: "doc.text.magnifyingglass", title: "免责声明", tint: .blue) {
+                showDisclaimer = true
+            }
+            Divider().padding(.leading, 52)
+            menuRow(icon: "power", title: "断开连接", tint: .red) {
+                Task { await tunnel.disconnect() }
+            }
+        }
+        .background(Color(.secondarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private func menuRow(icon: String,
+                         title: String,
+                         tint: Color,
+                         action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 18))
+                    .foregroundStyle(tint)
+                    .frame(width: 26)
+                Text(title).foregroundStyle(.primary)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.footnote)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func lastInjectCard(_ text: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "location.fill")
+                .foregroundStyle(tunnel.status.contains("成功") ? .green : .orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(tunnel.status).font(.subheadline.weight(.medium))
+                Text(text).font(.caption.monospaced()).foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(14)
+        .background(Color(.secondarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    // MARK: - 地图页
+
+    private var mapTab: some View {
+        ZStack(alignment: .top) {
+            NativeMapView(state: mapState, picked: picked) { c in
+                applyPick(c)
+            }
+            .ignoresSafeArea(edges: .bottom)
+
+            VStack(spacing: 10) {
+                searchBar
+                Spacer()
+                if let p = picked {
+                    coordChip(p)
+                }
+                Text("长按地图选择位置")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(.ultraThinMaterial, in: Capsule())
+                bottomButtons
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 8)
+            .padding(.bottom, 16)
+        }
+    }
+
+    private var searchBar: some View {
+        HStack(spacing: 10) {
+            Button { showSearch = true } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    Text("搜索地点...")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(.regularMaterial, in: Capsule())
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                coordText = ""
+                showCoordInput = true
+            } label: {
+                Image(systemName: "number")
+                    .font(.system(size: 17))
+                    .foregroundStyle(.tint)
+                    .frame(width: 44, height: 44)
+                    .background(.regularMaterial, in: Circle())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func coordChip(_ c: CLLocationCoordinate2D) -> some View {
+        Text(String(format: "%.7f, %.7f", c.latitude, c.longitude))
+            .font(.caption.monospaced())
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(.regularMaterial, in: Capsule())
+    }
+
+    private var bottomButtons: some View {
+        HStack(spacing: 10) {
+            bigButton(title: "模拟",
+                      icon: "location.fill",
+                      tint: .purple,
+                      enabled: picked != nil && license.isUsable) {
+                simulate()
+            }
+            bigButton(title: "清除",
+                      icon: "xmark",
+                      tint: .red,
+                      enabled: true) {
+                Task { await tunnel.clear() }
+            }
+            bigButton(title: "收藏",
+                      icon: "star",
+                      tint: .orange,
+                      enabled: true) {
+                if let p = picked { Favorites.add(p); toast = "已收藏" }
+                else { showFavorites = true }
+            }
+        }
+    }
+
+    private func bigButton(title: String,
+                           icon: String,
+                           tint: Color,
+                           enabled: Bool,
+                           action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: icon).font(.system(size: 15))
+                Text(title).font(.subheadline.weight(.medium))
+            }
+            .foregroundStyle(enabled ? tint : Color.secondary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .background(.regularMaterial, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(enabled == false)
+        .opacity(enabled ? 1 : 0.5)
+    }
+
+    // MARK: - 验证页
+
+    private var verifyTab: some View {
+        NavigationStack {
+            List {
+                Section("授权状态") {
+                    HStack {
+                        Text(license.state.text)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(license.isUsable ? .green : .orange)
+                        Spacer()
+                        Text(license.editionText)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    if license.isUsable {
+                        Text(license.remainingText)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    Button {
+                        showLicense = true
+                    } label: {
+                        Label(license.isUsable ? "查看授权详情" : "输入卡密激活",
+                              systemImage: "key.fill")
+                    }
+                }
+
+                Section("连接") {
+                    LabeledContent("配对文件", value: tunnel.hasPairing ? "已导入" : "未导入")
+                    LabeledContent("VPN", value: (tunnel.vpnUp ?? tunnel.tunnelReady) ? "已开启" : "未开启")
+                    LabeledContent("隧道", value: tunnel.tunnelReady ? "已连接" : "未连接")
+                    LabeledContent("状态", value: tunnel.status)
+                }
+
+                Section("坐标模式") {
+                    Picker("模式", selection: $modeRaw) {
+                        ForEach(InjectMode.allCases) { m in
+                            Text(m.rawValue).tag(m.rawValue)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                    .onChange(of: modeRaw) { _ in
+                        if let p = picked { applyPick(p) }
+                    }
+                    Text(mode.hint)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
-            }
 
-            Section("StikDebug 弹窗对照（英文 → 中文）") {
-                row("Simulate Location?", "= 要模拟位置吗 → 点 Set Location ✅")
-                row("Clear Location?", "= 要清除位置吗 → 不要点 ⚠️")
-                row("设备已连接", "= 配对正常，可以注入 ✅")
-                row("Pairing File Required", "= 缺配对文件，去 StikDebug 导入 ⚠️")
-                row("Simulation Failed", "= 注入失败，检查设备连接 ⚠️")
-                Text("它是第三方 App，弹窗文字改不了；所以本 App 用中文「本次结果」栏让你标记成功/失败。")
-                    .font(.footnote)
-                    .foregroundStyle(.orange)
+                Section("关于") {
+                    LabeledContent("版本", value: "1.1")
+                    Button("免责声明") { showDisclaimer = true }
+                }
             }
-
-            Section("原理") {
-                Text("StikDebug 的深链接口不换算坐标，收到什么就注入什么。"
-                     + "国内地图与 GPS 坐标系不同，差 400～700 米。"
-                     + "本 App 负责把坐标转成不偏的那个值。")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
+            .navigationTitle("验证")
+            .navigationBarTitleDisplayMode(.inline)
         }
-    }
-
-    private func row(_ title: String, _ value: String, highlight: Bool = false) -> some View {
-        HStack {
-            Text(title).font(.footnote).foregroundStyle(.secondary)
-            Spacer()
-            Text(value)
-                .font(.system(.footnote, design: .monospaced))
-                .foregroundStyle(highlight ? Color.green : Color.primary)
-                .multilineTextAlignment(.trailing)
-        }
-    }
-
-    private var pickedText: String {
-        guard let p = picked else { return "未选" }
-        return format(p)
-    }
-
-    private var injectText: String {
-        guard let p = injectPoint else { return "未选" }
-        return format(p)
-    }
-
-    private func format(_ c: CLLocationCoordinate2D) -> String {
-        String(format: "%.7f, %.7f", c.latitude, c.longitude)
-    }
-
-    private var resultHeadline: String {
-        guard let ok = lastResultOK else { return "尚未注入" }
-        return ok ? "✅ 模拟成功" : "❌ 模拟失败"
-    }
-
-    private var resultColor: Color {
-        guard let ok = lastResultOK else { return .secondary }
-        return ok ? .green : .red
     }
 
     // MARK: - 逻辑
+
+    private func jump(to c: CLLocationCoordinate2D) {
+        mapState.requestJump(to: c)
+        applyPick(c)
+        toast = "已跳到 " + String(format: "%.5f, %.5f", c.latitude, c.longitude)
+    }
 
     private func applyPick(_ c: CLLocationCoordinate2D) {
         picked = c
         let out: CLLocationCoordinate2D
         switch mode {
-        case .autoGCJ:
-            out = CoordTransform.gcj2wgs(c.latitude, c.longitude)
-        case .raw:
-            out = c
-        case .reverse:
-            out = CoordTransform.wgs2gcj(c.latitude, c.longitude)
+        case .autoGCJ: out = CoordTransform.gcj2wgs(c.latitude, c.longitude)
+        case .raw:     out = c
+        case .reverse: out = CoordTransform.wgs2gcj(c.latitude, c.longitude)
         }
         injectPoint = out
-        let d = CoordTransform.distance(c, out)
-        if d < 1 {
-            note = "原样注入（偏移 0 米）"
-        } else {
-            note = String(format: "%@，偏移 %.0f 米", mode.rawValue, d)
-        }
-        status = ""
     }
 
-    private func checkStik() -> Bool {
-        guard let u = URL(string: "stikdebug://") else { return false }
-        return UIApplication.shared.canOpenURL(u)
-    }
-
-    /// 一次注入只发一个深链。
-    ///
-    /// ⚠️ 重要教训：G 版曾"先 stop 再 simulate"，结果 StikDebug 每个深链
-    ///    都要弹一次确认框（Clear Location? / Simulate Location?）。
-    ///    用户点掉 Clear 后位置直接回真实 GPS，看起来就是"跳回去"。
-    ///    两个深链无法串行，必须只发设置坐标这一条。
-    private func inject() {
+    private func simulate() {
         guard let p = injectPoint else { return }
-        let lat = String(format: "%.7f", p.latitude)
-        let lon = String(format: "%.7f", p.longitude)
-        let s = DeepLink.simulate(lat: p.latitude, lon: p.longitude)
-        guard DeepLink.validate(s), let u = URL(string: s) else {
-            status = "URL 构造失败：" + s
+        guard license.isUsable else {
+            showLicense = true
             return
         }
-        UIApplication.shared.open(u) { ok in
-            DispatchQueue.main.async {
-                if ok {
-                    pendingCoordText = lat + ", " + lon
-                    wasInBackground = false
-                    status = "已发送：" + lat + ", " + lon
-                } else {
-                    status = "打开 StikDebug 失败，请确认已安装"
+        Task {
+            // 没隧道就先建，再注入
+            if tunnel.tunnelReady == false {
+                await tunnel.connect()
+            }
+            _ = await tunnel.inject(lat: p.latitude, lon: p.longitude)
+        }
+    }
+}
+
+// MARK: - 收藏
+
+enum Favorites {
+    private static let key = "favorites_v1"
+
+    static func load() -> [String] {
+        UserDefaults.standard.stringArray(forKey: key) ?? []
+    }
+
+    static func add(_ c: CLLocationCoordinate2D) {
+        var list = load()
+        let s = String(format: "%.7f,%.7f", c.latitude, c.longitude)
+        if list.contains(s) == false {
+            list.insert(s, at: 0)
+            if list.count > 50 { list.removeLast() }
+            UserDefaults.standard.set(list, forKey: key)
+        }
+    }
+
+    static func remove(at index: Int) {
+        var list = load()
+        guard index >= 0 && index < list.count else { return }
+        list.remove(at: index)
+        UserDefaults.standard.set(list, forKey: key)
+    }
+}
+
+// MARK: - 收藏列表
+
+struct FavoritesSheet: View {
+    var onPick: (CLLocation) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var items: [String] = Favorites.load()
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if items.isEmpty {
+                    Text("还没有收藏。在地图上选好点后点「收藏」。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(Array(items.enumerated()), id: \.offset) { idx, s in
+                    Button {
+                        if let c = CoordInput.parse(s) {
+                            onPick(CLLocation(latitude: c.latitude, longitude: c.longitude))
+                            dismiss()
+                        }
+                    } label: {
+                        Text(s).font(.footnote.monospaced())
+                    }
+                }
+                .onDelete { offsets in
+                    for i in offsets { Favorites.remove(at: i) }
+                    items = Favorites.load()
+                }
+            }
+            .navigationTitle("收藏")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("完成") { dismiss() }
                 }
             }
         }
     }
+}
 
-    private func sendClear() {
-        let cs = DeepLink.clear()
-        guard let u = URL(string: cs) else { return }
-        UIApplication.shared.open(u) { ok in
-            DispatchQueue.main.async {
-                self.status = ok ? "已请求恢复真实定位" : "打开 StikDebug 失败"
+// MARK: - 免责声明
+
+struct DisclaimerSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("免责声明").font(.title3.bold())
+                    Text("""
+                    1. 本 App 仅用于开发者调试、应用测试与个人学习。
+                    2. 坐标模拟只影响本机位置显示，不上传、不篡改任何服务器数据。
+                    3. 请勿用于考勤作弊、位置欺诈等违法或违反第三方服务条款的用途。
+                    4. 使用本 App 产生的一切后果由使用者自行承担。
+                    5. 本 App 不收集、不上传用户的真实位置与配对凭据。
+                    """)
+                    .font(.footnote)
+                }
+                .padding(20)
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("完成") { dismiss() }
+                }
             }
         }
     }
