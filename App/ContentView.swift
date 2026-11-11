@@ -37,6 +37,8 @@ struct ContentView: View {
     @StateObject private var license = LicenseManager()
     @StateObject private var mapState = MapState()
     @StateObject private var search = SearchModel()
+    @StateObject private var netWatch = NetWatch()
+    @State private var showAirplaneWarn = false
 
     // 选点
     @State private var picked: CLLocationCoordinate2D?
@@ -112,6 +114,18 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showDisclaimer) {
             DisclaimerSheet()
+        }
+        .alert("请先开启飞行模式", isPresented: $showAirplaneWarn) {
+            Button("我去开启", role: .cancel) {}
+            Button("已开启，继续模拟") {
+                Task { await runInject() }
+            }
+        } message: {
+            Text("当前是蜂窝网络（\(netWatch.interfaceText)）。\n\n"
+                 + "开着蜂窝时，考勤类 App 能拿到基站信息反推你的真实位置，"
+                 + "注入的位置会被判为异常。\n\n"
+                 + "做法：下拉控制中心 → 打开飞行模式 → 再点「设置」把 WiFi 打开"
+                 + "（需要网时）→ 回来继续。")
         }
         .alert("给这个位置起个名字", isPresented: $showFavNamePrompt) {
             TextField("例如：家 / 公司 / 学校", text: $favName)
@@ -681,31 +695,42 @@ struct ContentView: View {
             showLicense = true
             return
         }
-        Task {
-            // 注入前先跟服务器确认一次会员状态（锁定/解绑会立刻拦住）
-            _ = await license.syncRemote()
-            if license.isUsable == false {
-                showBanner(ok: false, text: license.lastMessage.isEmpty
-                           ? "会员已失效，请重新激活" : license.lastMessage)
-                showLicense = true
-                return
-            }
-            // 没隧道就先建，再注入
-            if tunnel.tunnelReady == false {
-                showBanner(ok: true, text: "正在建立隧道…")
-                await tunnel.connect()
-            }
-            let ok = smoothMove
-                ? await tunnel.injectSmooth(from: tunnel.lastCoord,
-                                            lat: p.latitude, lon: p.longitude)
-                : await tunnel.inject(lat: p.latitude, lon: p.longitude)
-            if ok {
-                History.add(lat: p.latitude, lon: p.longitude)
-                let c = String(format: "%.7f, %.7f", p.latitude, p.longitude)
-                showBanner(ok: true, text: "模拟成功\n" + c)
-            } else {
-                showBanner(ok: false, text: "模拟失败：" + tunnel.status)
-            }
+        // 蜂窝网络下先提醒开飞行模式（这是官方版的做法，也是不被检测的关键）
+        if netWatch.shouldWarnAirplane {
+            showAirplaneWarn = true
+            return
+        }
+
+        Task { await runInject() }
+    }
+
+    /// 真正做注入（弹窗确认后也走这里）
+    private func runInject() async {
+        guard let p = injectPoint else { return }
+
+        // 注入前先跟服务器确认一次会员状态（锁定/解绑会立刻拦住）
+        _ = await license.syncRemote()
+        if license.isUsable == false {
+            showBanner(ok: false, text: license.lastMessage.isEmpty
+                       ? "会员已失效，请重新激活" : license.lastMessage)
+            showLicense = true
+            return
+        }
+        // 没隧道就先建，再注入
+        if tunnel.tunnelReady == false {
+            showBanner(ok: true, text: "正在建立隧道…")
+            await tunnel.connect()
+        }
+        let ok = smoothMove
+            ? await tunnel.injectSmooth(from: tunnel.lastCoord,
+                                        lat: p.latitude, lon: p.longitude)
+            : await tunnel.inject(lat: p.latitude, lon: p.longitude)
+        if ok {
+            History.add(lat: p.latitude, lon: p.longitude)
+            let c = String(format: "%.7f, %.7f", p.latitude, p.longitude)
+            showBanner(ok: true, text: "模拟成功\n" + c)
+        } else {
+            showBanner(ok: false, text: "模拟失败：" + tunnel.status)
         }
     }
 }
