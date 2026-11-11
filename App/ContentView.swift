@@ -51,6 +51,7 @@ struct ContentView: View {
     @State private var showCoordInput = false
     @State private var showDisclaimer = false
     @State private var showFavorites = false
+    @State private var showHistory = false
     @State private var coordText = ""
     @State private var toast = ""
 
@@ -100,6 +101,9 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showFavorites) {
             FavoritesSheet { loc in jump(to: loc.coordinate) }
+        }
+        .sheet(isPresented: $showHistory) {
+            HistorySheet { c in jump(to: c) }
         }
         .sheet(isPresented: $showDisclaimer) {
             DisclaimerSheet()
@@ -374,7 +378,37 @@ struct ContentView: View {
             .padding(.horizontal, 14)
             .padding(.top, 8)
             .padding(.bottom, 16)
+
+            // 右侧浮动：收藏 / 历史
+            VStack(spacing: 12) {
+                sideButton(icon: "star", label: "收藏", tint: .orange) {
+                    showFavorites = true
+                }
+                sideButton(icon: "clock.arrow.circlepath", label: "历史", tint: .blue) {
+                    showHistory = true
+                }
+            }
+            .padding(.trailing, 12)
+            .padding(.top, 68)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
         }
+    }
+
+    private func sideButton(icon: String, label: String,
+                            tint: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 3) {
+                Image(systemName: icon)
+                    .font(.system(size: 18))
+                    .foregroundStyle(tint)
+                Text(label)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(width: 46, height: 46)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
     }
 
     private var searchBar: some View {
@@ -603,6 +637,7 @@ struct ContentView: View {
             }
             let ok = await tunnel.inject(lat: p.latitude, lon: p.longitude)
             if ok {
+                History.add(lat: p.latitude, lon: p.longitude)
                 let c = String(format: "%.7f, %.7f", p.latitude, p.longitude)
                 showBanner(ok: true, text: "模拟成功\n" + c)
             } else {
@@ -636,6 +671,141 @@ enum Favorites {
         guard index >= 0 && index < list.count else { return }
         list.remove(at: index)
         UserDefaults.standard.set(list, forKey: key)
+    }
+}
+
+// MARK: - 历史记录
+
+/// 一次模拟记录
+struct HistoryItem: Codable, Identifiable {
+    var id: String { "\(lat),\(lon),\(ts)" }
+    let lat: Double
+    let lon: Double
+    let ts: TimeInterval
+    var name: String = ""
+
+    var timeText: String {
+        let f = DateFormatter()
+        f.dateFormat = "MM-dd HH:mm"
+        return f.string(from: Date(timeIntervalSince1970: ts))
+    }
+
+    var coordText: String {
+        String(format: "%.7f, %.7f", lat, lon)
+    }
+
+    var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: lat, longitude: lon)
+    }
+}
+
+enum History {
+    private static let key = "history_v1"
+    private static let maxCount = 100
+
+    static func load() -> [HistoryItem] {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let list = try? JSONDecoder().decode([HistoryItem].self, from: data)
+        else { return [] }
+        return list
+    }
+
+    static func add(lat: Double, lon: Double, name: String = "") {
+        var list = load()
+        // 同一个点一分钟内不重复记
+        if let first = list.first,
+           abs(first.lat - lat) < 0.0000005, abs(first.lon - lon) < 0.0000005,
+           Date().timeIntervalSince1970 - first.ts < 60 {
+            return
+        }
+        list.insert(HistoryItem(lat: lat, lon: lon,
+                                ts: Date().timeIntervalSince1970, name: name),
+                    at: 0)
+        if list.count > maxCount { list.removeLast(list.count - maxCount) }
+        save(list)
+    }
+
+    static func remove(at index: Int) {
+        var list = load()
+        guard index >= 0 && index < list.count else { return }
+        list.remove(at: index)
+        save(list)
+    }
+
+    static func clear() { save([]) }
+
+    private static func save(_ list: [HistoryItem]) {
+        if let data = try? JSONEncoder().encode(list) {
+            UserDefaults.standard.set(data, forKey: key)
+        }
+    }
+}
+
+// MARK: - 历史列表
+
+struct HistorySheet: View {
+    var onPick: (CLLocationCoordinate2D) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var items: [HistoryItem] = History.load()
+    @State private var showClearConfirm = false
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if items.isEmpty {
+                    Text("还没有模拟记录。\n在地图上选好点、点「模拟」成功后会自动记录在这里。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(Array(items.enumerated()), id: \.offset) { idx, item in
+                    Button {
+                        onPick(item.coordinate)
+                        dismiss()
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "mappin.circle.fill")
+                                .foregroundStyle(.blue)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(item.coordText)
+                                    .font(.system(.footnote, design: .monospaced))
+                                    .foregroundStyle(.primary)
+                                Text(item.timeText)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                }
+                .onDelete { offsets in
+                    for i in offsets { History.remove(at: i) }
+                    items = History.load()
+                }
+            }
+            .navigationTitle("模拟历史")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    if items.isEmpty == false {
+                        Button("清空") { showClearConfirm = true }
+                            .foregroundStyle(.red)
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("完成") { dismiss() }
+                }
+            }
+            .alert("清空所有模拟历史？", isPresented: $showClearConfirm) {
+                Button("取消", role: .cancel) {}
+                Button("清空", role: .destructive) {
+                    History.clear()
+                    items = []
+                }
+            }
+        }
     }
 }
 
