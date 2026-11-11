@@ -82,6 +82,53 @@ final class LicenseManager: ObservableObject {
         return License.dateText(fromEpoch: expireEpoch)
     }
 
+    // MARK: - 在线卡密（走发卡系统，和牛牛守护共用卡库）
+
+    /// 在线激活：调 /card/active 把卡密绑到本机
+    ///
+    /// 服务端返回 ret=0 才算成功；成功后立刻查一次 /card/info 拿到准确到期时间。
+    @discardableResult
+    func activateRemote(_ input: String) async -> Bool {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else {
+            lastMessage = "请输入卡密"
+            return false
+        }
+        lastMessage = "正在验证…"
+        let r = await CardAPI.activate(code: trimmed)
+        if r.ok {
+            await MainActor.run {
+                self.code = trimmed
+                self.expireEpoch = r.permanent ? 0 : (r.endMs / 1000)
+                self.save()
+                self.refresh()
+                self.lastMessage = "激活成功" + (r.summary.isEmpty ? "" : "·" + r.summary)
+            }
+            return true
+        }
+        await MainActor.run {
+            self.lastMessage = r.message.isEmpty ? "激活失败" : r.message
+        }
+        return false
+    }
+
+    /// 在线同步：按设备号查会员状态（启动时/刷新时调）
+    @discardableResult
+    func syncRemote() async -> Bool {
+        let r = await CardAPI.info()
+        if r.ok {
+            await MainActor.run {
+                self.expireEpoch = r.permanent ? 0 : (r.endMs / 1000)
+                if self.code.isEmpty { self.code = r.account }
+                self.save()
+                self.refresh()
+            }
+            return state == .active
+        }
+        // 网络不通时保留本地状态，不要误锁
+        return state == .active
+    }
+
     /// 激活
     @discardableResult
     func activate(_ input: String) -> Bool {

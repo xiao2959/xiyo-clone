@@ -62,8 +62,10 @@ struct LicenseView: View {
                             .font(.system(.body, design: .monospaced))
 
                         Button {
-                            if license.activate(input) {
-                                input = ""
+                            Task {
+                                if await license.activateRemote(input) {
+                                    input = ""
+                                }
                             }
                         } label: {
                             Text("激活").fontWeight(.semibold)
@@ -74,7 +76,7 @@ struct LicenseView: View {
 
                 Section {
                     Button {
-                        license.refresh()
+                        Task { await license.syncRemote() }
                     } label: {
                         Label("刷新状态", systemImage: "arrow.clockwise")
                     }
@@ -95,8 +97,8 @@ struct LicenseView: View {
                 }
 
                 Section("说明") {
-                    Text("授权码由发卡端生成，内含到期时间，App 离线校验。"
-                         + "到期后功能自动锁定，需要重新激活。")
+                    Text("卡密由发卡面板生成，激活时绑定本机设备。"
+                         + "到期后功能自动锁定，需要重新购买卡密。")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }

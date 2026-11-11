@@ -72,6 +72,8 @@ struct ContentView: View {
         }
         .tint(.blue)
         .task {
+            // 启动时按设备号同步一次会员状态（网络不通就保留本地状态）
+            _ = await license.syncRemote()
             tunnel.refresh()
             // 有配对文件就悄悄把隧道接上，用户不用管
             if tunnel.hasPairing && tunnel.tunnelReady == false {
