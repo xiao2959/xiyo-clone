@@ -38,9 +38,15 @@ final class LicenseManager: ObservableObject {
     /// 到期时间戳（秒）。0 = 长期有效
     @Published private(set) var expireEpoch: Int64 = 0
     @Published private(set) var lastMessage: String = ""
+    /// 这张卡是不是「在线激活」来的（走发卡系统）
+    @Published private(set) var remoteBound: Bool = false
+    /// 在线卡是否永久
+    @Published private(set) var permanentCard: Bool = false
 
     private let kCode = "xiyo_license_code"
     private let kExpire = "xiyo_license_expire"
+    private let kRemote = "cdpro_license_remote"
+    private let kPermanent = "cdpro_license_permanent"
 
     init() {
         load()
@@ -99,6 +105,8 @@ final class LicenseManager: ObservableObject {
         if r.ok {
             await MainActor.run {
                 self.code = trimmed
+                self.remoteBound = true
+                self.permanentCard = r.permanent
                 self.expireEpoch = r.permanent ? 0 : (r.endMs / 1000)
                 self.save()
                 self.refresh()
@@ -118,6 +126,8 @@ final class LicenseManager: ObservableObject {
         let r = await CardAPI.info()
         if r.ok {
             await MainActor.run {
+                self.remoteBound = true
+                self.permanentCard = r.permanent
                 self.expireEpoch = r.permanent ? 0 : (r.endMs / 1000)
                 if self.code.isEmpty { self.code = r.account }
                 self.save()
@@ -155,14 +165,29 @@ final class LicenseManager: ObservableObject {
     }
 
     /// 重新检查（对应官方「检查授权」/「刷新状态」）
+    ///
+    /// ⚠️ 关键：在线卡密（如 63Q4-8GPH-Y59A-WK4Y）不是本地那套 XYO 格式，
+    ///    绝不能再拿去 License.decode()，否则必然解不开、状态会被打回「未激活」，
+    ///    表现就是"点了激活没反应"。
     @discardableResult
     func refresh() -> Bool {
+        // 在线激活的卡：按服务器给的到期时间判断
+        if remoteBound {
+            if permanentCard {
+                state = .active
+                return true
+            }
+            let now = Int64(Date().timeIntervalSince1970)
+            state = (expireEpoch > now) ? .active : .expired
+            return state == .active
+        }
+
+        // 旧的本地卡：沿用原来的离线校验
         guard code.isEmpty == false else {
             state = .unactivated
             return false
         }
         guard let exp = License.decode(code) else {
-            // 存储被破坏
             state = .unactivated
             return false
         }
@@ -182,9 +207,13 @@ final class LicenseManager: ObservableObject {
         expireEpoch = 0
         state = .unactivated
         lastMessage = "已清除授权"
+        remoteBound = false
+        permanentCard = false
         let d = UserDefaults.standard
         d.removeObject(forKey: kCode)
         d.removeObject(forKey: kExpire)
+        d.removeObject(forKey: kRemote)
+        d.removeObject(forKey: kPermanent)
     }
 
     // MARK: - 存储
@@ -193,11 +222,15 @@ final class LicenseManager: ObservableObject {
         let d = UserDefaults.standard
         d.set(code, forKey: kCode)
         d.set(expireEpoch, forKey: kExpire)
+        d.set(remoteBound, forKey: kRemote)
+        d.set(permanentCard, forKey: kPermanent)
     }
 
     private func load() {
         let d = UserDefaults.standard
         if let c = d.string(forKey: kCode) { code = c }
         expireEpoch = Int64(d.double(forKey: kExpire))
+        remoteBound = d.bool(forKey: kRemote)
+        permanentCard = d.bool(forKey: kPermanent)
     }
 }

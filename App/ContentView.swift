@@ -314,6 +314,20 @@ struct ContentView: View {
 
             VStack(spacing: 10) {
                 searchBar
+                if license.isUsable == false {
+                    Button { showLicense = true } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "lock.fill").font(.caption)
+                            Text("未激活 · 点此输入卡密").font(.footnote.weight(.medium))
+                            Image(systemName: "chevron.right").font(.caption2)
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(Color.orange, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
                 Spacer()
                 if let p = picked {
                     coordChip(p)
@@ -410,7 +424,12 @@ struct ContentView: View {
             bigButton(title: "模拟",
                       icon: "location.fill",
                       tint: .purple,
-                      enabled: picked != nil && license.isUsable) {
+                      enabled: picked != nil) {
+                if license.isUsable == false {
+                    showBanner(ok: false, text: "还没激活，先输入卡密")
+                    showLicense = true
+                    return
+                }
                 simulate()
             }
             bigButton(title: "清除",
