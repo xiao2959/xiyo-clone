@@ -23,9 +23,18 @@ enum InjectMode: String, CaseIterable, Identifiable {
 
     var hint: String {
         switch self {
-        case .autoGCJ: return "地图点是 GCJ-02 时用（默认）"
-        case .raw:     return "地图点本来就是 WGS-84 时用"
-        case .reverse: return "前两种都往反方向偏时用"
+        case .autoGCJ: return "标准模式 · 适用于大部分设备（默认）"
+        case .raw:     return "兼容模式 · 适用于偏移设备"
+        case .reverse: return "反向模式 · 前两种都往反方向偏时用"
+        }
+    }
+
+    /// 对应官方版的叫法，方便对照
+    var officialName: String {
+        switch self {
+        case .autoGCJ: return "标准模式"
+        case .raw:     return "兼容模式"
+        case .reverse: return "反向模式"
         }
     }
 }
@@ -39,6 +48,8 @@ struct ContentView: View {
     @StateObject private var search = SearchModel()
     @StateObject private var netWatch = NetWatch()
     @State private var showAirplaneWarn = false
+    /// 微调步长（米）
+    @AppStorage("nudge_meters") private var nudgeMeters: Double = 10
 
     // 选点
     @State private var picked: CLLocationCoordinate2D?
@@ -118,6 +129,11 @@ struct ContentView: View {
         .alert("请先开启飞行模式", isPresented: $showAirplaneWarn) {
             Button("我去开启", role: .cancel) {}
             Button("已开启，继续模拟") {
+                // 再检查一次：如果还是蜂窝，说明飞行模式没生效
+                if netWatch.onCellular {
+                    showAirplaneWarn = true
+                    return
+                }
                 Task { await runInject() }
             }
         } message: {
@@ -397,6 +413,7 @@ struct ContentView: View {
                 Spacer()
                 if let p = picked {
                     coordChip(p)
+                    nudgeBar()
                 }
                 Text("长按地图选择位置")
                     .font(.caption)
@@ -474,6 +491,53 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
         }
+    }
+
+    /// 微调：四个方向按米数平移，解决「就差一点点」
+    private func nudgeBar() -> some View {
+        HStack(spacing: 6) {
+            nudgeButton("chevron.left")  { nudge(dLat: 0, dLon: -1) }
+            VStack(spacing: 2) {
+                nudgeButton("chevron.up")   { nudge(dLat: 1, dLon: 0) }
+                nudgeButton("chevron.down") { nudge(dLat: -1, dLon: 0) }
+            }
+            nudgeButton("chevron.right") { nudge(dLat: 0, dLon: 1) }
+
+            Button {
+                nudgeMeters = (nudgeMeters < 50) ? nudgeMeters * 5 : 5
+            } label: {
+                Text("\(Int(nudgeMeters))m")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 42, height: 26)
+                    .background(.regularMaterial, in: Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(6)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private func nudgeButton(_ icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.blue)
+                .frame(width: 30, height: 26)
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// 按米数平移当前选点
+    private func nudge(dLat: Double, dLon: Double) {
+        guard let cur = picked else { return }
+        let metersPerDegLat = 111_320.0
+        let metersPerDegLon = metersPerDegLat * cos(cur.latitude * .pi / 180)
+        let new = CLLocationCoordinate2D(
+            latitude: cur.latitude + dLat * nudgeMeters / metersPerDegLat,
+            longitude: cur.longitude + dLon * nudgeMeters / max(metersPerDegLon, 1))
+        applyPick(new)
+        showBanner(ok: true, text: String(format: "已微调 ±%.0f 米", nudgeMeters))
     }
 
     private func coordChip(_ c: CLLocationCoordinate2D) -> some View {
@@ -635,6 +699,10 @@ struct ContentView: View {
                     }
                     Text(mode.hint)
                         .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Text("对照官方：标准模式（适用大部分设备）/ 兼容模式（适用于偏移设备）。"
+                         + "实测偏了就切一下，选对一次会记住。")
+                        .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
 
