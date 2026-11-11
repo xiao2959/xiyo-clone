@@ -231,6 +231,9 @@ struct DirectInjectView: View {
                 tunnelReady = true
                 status = "隧道已建立，可以注入了"
                 append("✅ [\(r.code)] \(r.message)")
+                // 把完整服务列表传到服务器，方便远端排查（不用截图）
+                let svc = await TunnelBridge.services()
+                uploadDiag(host: host, diag: r.message, services: svc)
                 busy = false
                 return
             }
@@ -247,6 +250,17 @@ struct DirectInjectView: View {
         status = "失败：建隧道失败"
         append("❌ 全部候选地址都失败，最后一条：\(lastMsg)")
         busy = false
+    }
+
+    /// 把诊断信息 POST 到实验服务器（失败静默忽略，不影响使用）
+    private func uploadDiag(host: String, diag: String, services: String) {
+        guard let url = URL(string: "http://103.119.2.243/upload/lab2026/services.txt") else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 15
+        let body = "host=\(host)\n--- diag ---\n\(diag)\n--- services ---\n\(services)\n"
+        req.httpBody = body.data(using: .utf8)
+        URLSession.shared.dataTask(with: req) { _, _, _ in }.resume()
     }
 
     private func doInject() async {
