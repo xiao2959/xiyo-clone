@@ -103,7 +103,7 @@ struct ContentView: View {
             DirectInjectView(target: injectPoint)
         }
         .sheet(isPresented: $showFavorites) {
-            FavoritesSheet { loc in jump(to: loc.coordinate) }
+            FavoritesSheet { c in jump(to: c) }
         }
         .sheet(isPresented: $showHistory) {
             HistorySheet { c in jump(to: c) }
