@@ -29,6 +29,8 @@ final class TunnelModel: ObservableObject {
     @Published var status: String = "未连接"
     /// 最近一次注入的坐标
     @Published var lastInjected: String?
+    /// 最近一次注入的纬经度（平滑移动的起点）
+    @Published var lastCoord: (Double, Double)?
     /// 日志（诊断页显示）
     @Published var log: [String] = []
 
@@ -160,6 +162,7 @@ final class TunnelModel: ObservableObject {
         if r.ok {
             tunnelReady = true
             lastInjected = String(format: "%.7f, %.7f", lat, lon)
+            lastCoord = (lat, lon)
             status = "模拟成功"
             append("✅ \(r.message)")
             return true
@@ -168,6 +171,43 @@ final class TunnelModel: ObservableObject {
         status = "注入失败：\(r.codeText)"
         append("❌ \(r.message)")
         return false
+    }
+
+    /// 平滑移动注入：从上一个点沿直线逐步走到目标点
+    ///
+    /// 为什么：一步位置瞬移会被考勤类 App 判定「速度异常」，
+    /// 分成 20 步、每步 150ms，看起来就像正常移动。
+    @discardableResult
+    func injectSmooth(from: (Double, Double)?,
+                      lat: Double, lon: Double) async -> Bool {
+        guard let start = from else {
+            return await inject(lat: lat, lon: lon)
+        }
+
+        // 还没有会话就先在起点建一条
+        if TunnelBridge.alive() == false {
+            guard await inject(lat: start.0, lon: start.1) else { return false }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+        }
+
+        guard busy == false else { return false }
+        busy = true
+        defer { busy = false }
+
+        let steps = 20
+        for i in 1...steps {
+            let t = Double(i) / Double(steps)
+            let la = start.0 + (lat - start.0) * t
+            let lo = start.1 + (lon - start.1) * t
+            _ = await TunnelBridge.moveDVT(lat: la, lon: lo)
+            try? await Task.sleep(nanoseconds: 150_000_000)
+        }
+
+        lastCoord = (lat, lon)
+        lastInjected = String(format: "%.7f, %.7f", lat, lon)
+        status = "模拟成功"
+        append("✅ 平滑移动到位：" + lastInjected!)
+        return true
     }
 
     func clear() async {

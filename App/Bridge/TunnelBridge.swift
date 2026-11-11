@@ -104,6 +104,15 @@ enum TunnelBridge {
         }
     }
 
+    /// 平滑移动：在已建立的会话上改坐标（不重建连接）
+    static func moveDVT(lat: Double, lon: Double) async -> Result {
+        await call {
+            var buf = [CChar](repeating: 0, count: 512)
+            let code = tunnel_move_dvt(lat, lon, &buf, Int32(buf.count))
+            return Result(code: code, message: readBuffer(buf))
+        }
+    }
+
     static func clearDVT() async -> Result {
         await call {
             var buf = [CChar](repeating: 0, count: 1024)

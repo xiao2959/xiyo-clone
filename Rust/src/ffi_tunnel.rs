@@ -275,11 +275,22 @@ pub extern "C" fn tunnel_clear(out_buf: *mut c_char, cap: i32) -> i32 {
 
 static DVT_TASK: OnceLock<Mutex<Option<tokio::task::JoinHandle<()>>>> = OnceLock::new();
 
+/// 已建立的 DVT 会话的坐标通道：滑动时直接改坐标，不重建连接
+static DVT_TX: OnceLock<Mutex<Option<tokio::sync::mpsc::UnboundedSender<(f64, f64)>>>> =
+    OnceLock::new();
+
+fn dvt_tx() -> &'static Mutex<Option<tokio::sync::mpsc::UnboundedSender<(f64, f64)>>> {
+    DVT_TX.get_or_init(|| Mutex::new(None))
+}
+
 fn dvt_task() -> &'static Mutex<Option<tokio::task::JoinHandle<()>>> {
     DVT_TASK.get_or_init(|| Mutex::new(None))
 }
 
 fn stop_dvt_task() {
+    if let Ok(mut g) = dvt_tx().lock() {
+        *g = None;
+    }
     if let Ok(mut g) = dvt_task().lock() {
         if let Some(h) = g.take() {
             h.abort();
@@ -342,11 +353,13 @@ pub extern "C" fn tunnel_inject_dvt(
     // 旧任务先停掉
     stop_dvt_task();
 
-    let (task, result) = rt().block_on(async move {
+    let (task, result, move_tx) = rt().block_on(async move {
         use idevice::services::dvt::location_simulation::LocationSimulationClient;
         use idevice::services::dvt::remote_server::RemoteServerClient;
 
         let (tx, rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
+        let (move_tx, mut move_rx) =
+            tokio::sync::mpsc::unbounded_channel::<(f64, f64)>();
         let handle = tokio::spawn(async move {
             let mut rsc = RemoteServerClient::new(stream);
             let mut loc = match LocationSimulationClient::new(&mut rsc).await {
@@ -361,7 +374,19 @@ pub extern "C" fn tunnel_inject_dvt(
                 return;
             }
             let _ = tx.send(Ok(()));
-            // 连接必须保持，否则模拟会停
+
+            // 之后一直收新坐标（滑动用），保持同一条连接
+            loop {
+                match move_rx.recv().await {
+                    Some((la, lo)) => {
+                        if let Err(e) = loc.set(la, lo).await {
+                            eprintln!("[tunnel] 滑动坐标失败: {e}");
+                        }
+                    }
+                    None => break,
+                }
+            }
+            // 通道关了也别断开，否则模拟停止
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
             }
@@ -370,13 +395,16 @@ pub extern "C" fn tunnel_inject_dvt(
             Ok(v) => v,
             Err(_) => Err("任务提前结束".to_string()),
         };
-        (handle, r)
+        (handle, r, move_tx)
     });
 
     match result {
         Ok(()) => {
             if let Ok(mut g) = dvt_task().lock() {
                 *g = Some(task);
+            }
+            if let Ok(mut g) = dvt_tx().lock() {
+                *g = Some(move_tx);
             }
             let msg = format!("DVT 注入成功：{lat}, {lon}（连接已保持）");
             write_out(out_buf, cap, &msg);
@@ -390,6 +418,32 @@ pub extern "C" fn tunnel_inject_dvt(
             write_out(out_buf, cap, &msg);
             rc::ACTION_FAILED
         }
+    }
+}
+
+/// 滑动：在已建立的 DVT 会话上直接改坐标，不重建连接。
+///
+/// 用于「平滑移动」：从 A 点逐步走到 B 点，
+/// 避免一步位置瞬移导致客户端判定「速度异常」。
+#[no_mangle]
+pub extern "C" fn tunnel_move_dvt(lat: f64, lon: f64, out_buf: *mut c_char, cap: i32) -> i32 {
+    if let Err(e) = crate::coredevice_location::validate_coordinate(lat, lon) {
+        write_out(out_buf, cap, &e);
+        return rc::BAD_ARG;
+    }
+    let sent = match dvt_tx().lock() {
+        Ok(g) => match g.as_ref() {
+            Some(tx) => tx.send((lat, lon)).is_ok(),
+            None => false,
+        },
+        Err(_) => false,
+    };
+    if sent {
+        write_out(out_buf, cap, "ok");
+        rc::OK
+    } else {
+        write_out(out_buf, cap, "没有在会话，先调 tunnel_inject_dvt");
+        rc::NO_TUNNEL
     }
 }
 

@@ -42,6 +42,8 @@ struct ContentView: View {
     @State private var picked: CLLocationCoordinate2D?
     @State private var injectPoint: CLLocationCoordinate2D?
     @AppStorage("inject_mode") private var modeRaw: String = InjectMode.autoGCJ.rawValue
+    /// 平滑移动（避免瞬移导致「速度异常」判定）
+    @AppStorage("smooth_move") private var smoothMove: Bool = true
 
     // 界面
     @State private var showSearch = false
@@ -592,6 +594,21 @@ struct ContentView: View {
                     LabeledContent("状态", value: tunnel.status)
                 }
 
+                Section("注入方式") {
+                    Toggle(isOn: $smoothMove) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("平滑移动")
+                            Text("分 20 步过去，不会一下子跳过去；能减少「速度异常」判定")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Text("部分考勤 App 会检测 iOS 的「软件模拟位置」标志，"
+                         + "这个开关只能减少跳变痕迹，无法消除该标志。")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
+
                 Section("坐标模式") {
                     Picker("模式", selection: $modeRaw) {
                         ForEach(InjectMode.allCases) { m in
@@ -678,7 +695,10 @@ struct ContentView: View {
                 showBanner(ok: true, text: "正在建立隧道…")
                 await tunnel.connect()
             }
-            let ok = await tunnel.inject(lat: p.latitude, lon: p.longitude)
+            let ok = smoothMove
+                ? await tunnel.injectSmooth(from: tunnel.lastCoord,
+                                            lat: p.latitude, lon: p.longitude)
+                : await tunnel.inject(lat: p.latitude, lon: p.longitude)
             if ok {
                 History.add(lat: p.latitude, lon: p.longitude)
                 let c = String(format: "%.7f, %.7f", p.latitude, p.longitude)

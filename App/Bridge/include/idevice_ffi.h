@@ -63,6 +63,9 @@ int32_t tunnel_inject_dvt(double lat, double lon, char *out_buf, int32_t cap);
 int32_t tunnel_alive(char *out_buf, int32_t cap);
 int32_t tunnel_clear_dvt(char *out_buf, int32_t cap);
 
+/* 在已建立的 DVT 会话上直接改坐标（平滑移动用） */
+int32_t tunnel_move_dvt(double lat, double lon, char *out_buf, int32_t cap);
+
 // 列出全部 RSD 服务名（排查用）
 int32_t tunnel_services(char *out_buf, int32_t cap);
 
