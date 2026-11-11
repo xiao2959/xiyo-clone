@@ -89,6 +89,23 @@ enum TunnelBridge {
         }
     }
 
+    /// DVT 通路注入（iOS 27 实际可用的路径）
+    static func injectDVT(lat: Double, lon: Double) async -> Result {
+        await call {
+            var buf = [CChar](repeating: 0, count: 4096)
+            let code = tunnel_inject_dvt(lat, lon, &buf, Int32(buf.count))
+            return Result(code: code, message: readBuffer(buf))
+        }
+    }
+
+    static func clearDVT() async -> Result {
+        await call {
+            var buf = [CChar](repeating: 0, count: 1024)
+            let code = tunnel_clear_dvt(&buf, Int32(buf.count))
+            return Result(code: code, message: readBuffer(buf))
+        }
+    }
+
     static func clear() async -> Result {
         await call {
             var buf = [CChar](repeating: 0, count: 2048)

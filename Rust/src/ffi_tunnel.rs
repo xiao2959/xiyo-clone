@@ -15,7 +15,7 @@ use std::os::raw::c_char;
 use std::sync::{Mutex, OnceLock};
 
 use crate::coredevice_location::{CLEAR_ACTIONS, FEATURE_SIMULATE_LOCATION, SET_ACTIONS};
-use crate::tunnel::{OpenTunnel, open_tunnel, port_of};
+use crate::tunnel::{OpenTunnel, open_tunnel};
 
 /// 返回码
 pub mod rc {
@@ -259,6 +259,145 @@ pub extern "C" fn tunnel_clear(out_buf: *mut c_char, cap: i32) -> i32 {
             code
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// DVT 通路注入（com.apple.instruments.dtservicehub）
+//
+// iOS 27 的 RSD 表里没有 com.apple.coredevice.locationservice，
+// 但有 com.apple.instruments.dtservicehub —— 这是 DVT 服务枢纽，
+// 定位模拟走它：开通道 com.apple.instruments.server.services.LocationSimulation
+// 然后调用 simulateLocationWithLatitude:longitude:（库里有现成实现）。
+//
+// 注意：DVT 要求连接保持，连接一断模拟就停 —— 所以这里 spawn 一个
+// 常驻任务把连接撑住，clear 时 abort 它。
+// ---------------------------------------------------------------------------
+
+static DVT_TASK: OnceLock<Mutex<Option<tokio::task::JoinHandle<()>>>> = OnceLock::new();
+
+fn dvt_task() -> &'static Mutex<Option<tokio::task::JoinHandle<()>>> {
+    DVT_TASK.get_or_init(|| Mutex::new(None))
+}
+
+fn stop_dvt_task() {
+    if let Ok(mut g) = dvt_task().lock() {
+        if let Some(h) = g.take() {
+            h.abort();
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn tunnel_inject_dvt(
+    lat: f64,
+    lon: f64,
+    out_buf: *mut c_char,
+    cap: i32,
+) -> i32 {
+    if let Err(e) = crate::coredevice_location::validate_coordinate(lat, lon) {
+        write_out(out_buf, cap, &e);
+        return rc::BAD_ARG;
+    }
+
+    // 连上 dtservicehub（需要 &mut handle，所以先同步做）
+    let stream = {
+        let mut guard = match held().lock() {
+            Ok(g) => g,
+            Err(_) => {
+                write_out(out_buf, cap, "状态锁失效");
+                return rc::NO_TUNNEL;
+            }
+        };
+        let tunnel = match guard.tunnel.as_mut() {
+            Some(t) => t,
+            None => {
+                write_out(out_buf, cap, "隧道还没建立，先调 tunnel_open");
+                return rc::NO_TUNNEL;
+            }
+        };
+        let port = match tunnel.services.get("com.apple.instruments.dtservicehub") {
+            Some(p) => *p,
+            None => {
+                let cands = crate::tunnel::location_candidates(tunnel);
+                let msg = format!(
+                    "RSD 表里没有 com.apple.instruments.dtservicehub（共 {} 个服务；dt 候选: {}）",
+                    tunnel.services.len(),
+                    if cands.is_empty() { "无".to_string() } else { cands.join(",") }
+                );
+                write_out(out_buf, cap, &msg);
+                return rc::NO_SERVICE;
+            }
+        };
+        use idevice::provider::RsdProvider;
+        match rt().block_on(tunnel.handle.connect_to_service_port(port)) {
+            Ok(s) => s,
+            Err(e) => {
+                let msg = format!("连 dtservicehub({port}) 失败: {e}");
+                write_out(out_buf, cap, &msg);
+                return rc::CONNECT_FAILED;
+            }
+        }
+    };
+
+    // 旧任务先停掉
+    stop_dvt_task();
+
+    let (task, result) = rt().block_on(async move {
+        use idevice::services::dvt::location_simulation::LocationSimulationClient;
+        use idevice::services::dvt::remote_server::RemoteServerClient;
+
+        let (tx, rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
+        let handle = tokio::spawn(async move {
+            let mut rsc = RemoteServerClient::new(stream);
+            let mut loc = match LocationSimulationClient::new(&mut rsc).await {
+                Ok(l) => l,
+                Err(e) => {
+                    let _ = tx.send(Err(format!("开 LocationSimulation 通道失败: {e}")));
+                    return;
+                }
+            };
+            if let Err(e) = loc.set(lat, lon).await {
+                let _ = tx.send(Err(format!("simulateLocation 失败: {e}")));
+                return;
+            }
+            let _ = tx.send(Ok(()));
+            // 连接必须保持，否则模拟会停
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            }
+        });
+        let r = match rx.await {
+            Ok(v) => v,
+            Err(_) => Err("任务提前结束".to_string()),
+        };
+        (handle, r)
+    });
+
+    match result {
+        Ok(()) => {
+            if let Ok(mut g) = dvt_task().lock() {
+                *g = Some(task);
+            }
+            let msg = format!("DVT 注入成功：{lat}, {lon}（连接已保持）");
+            write_out(out_buf, cap, &msg);
+            rc::OK
+        }
+        Err(msg) => {
+            task.abort();
+            if let Ok(mut g) = held().lock() {
+                g.last_error = msg.clone();
+            }
+            write_out(out_buf, cap, &msg);
+            rc::ACTION_FAILED
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn tunnel_clear_dvt(out_buf: *mut c_char, cap: i32) -> i32 {
+    stop_dvt_task();
+    write_out(out_buf, cap, "已断开定位模拟连接（模拟随之停止）");
+    rc::OK
 }
 
 // ---------------------------------------------------------------------------

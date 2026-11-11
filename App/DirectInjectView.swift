@@ -299,7 +299,12 @@ struct DirectInjectView: View {
         busy = true
         status = "正在注入…"
         append("注入 \(String(format: "%.7f, %.7f", t.latitude, t.longitude))")
-        let r = await TunnelBridge.inject(lat: t.latitude, lon: t.longitude)
+        // 优先走 DVT（iOS 27 上唯一可用的定位通路）
+        var r = await TunnelBridge.injectDVT(lat: t.latitude, lon: t.longitude)
+        if r.ok == false {
+            append("DVT 通路失败，改试 CoreDevice: \(r.message)")
+            r = await TunnelBridge.inject(lat: t.latitude, lon: t.longitude)
+        }
         if r.code == Int32(TunnelBridge.Code.noTunnel.rawValue) { tunnelReady = false }
         status = r.ok ? "注入成功" : "失败：\(r.codeText)"
         append("\(r.ok ? "✅" : "❌") [\(r.code)] \(r.message)")
@@ -309,6 +314,7 @@ struct DirectInjectView: View {
     private func doClear() async {
         busy = true
         append("清除模拟位置")
+        _ = await TunnelBridge.clearDVT()
         let r = await TunnelBridge.clear()
         status = r.ok ? "已清除" : "失败：\(r.codeText)"
         append("\(r.ok ? "✅" : "❌") [\(r.code)] \(r.message)")

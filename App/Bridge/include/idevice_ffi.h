@@ -53,6 +53,13 @@ int32_t tunnel_inject(double lat, double lon, char *out_buf, int32_t cap);
 // 清除模拟位置
 int32_t tunnel_clear(char *out_buf, int32_t cap);
 
+/* ---------- DVT 通路注入（com.apple.instruments.dtservicehub） ----------
+ * iOS 27 的 RSD 表里没有 coredevice.locationservice，但有 dtservicehub，
+ * 定位模拟走 DVT。连接必须保持，断开即停止模拟。
+ */
+int32_t tunnel_inject_dvt(double lat, double lon, char *out_buf, int32_t cap);
+int32_t tunnel_clear_dvt(char *out_buf, int32_t cap);
+
 // 列出全部 RSD 服务名（排查用）
 int32_t tunnel_services(char *out_buf, int32_t cap);
 
