@@ -172,6 +172,12 @@ struct DirectInjectView: View {
             .onAppear {
                 // 配对文件是持久化的，进页面就沿用，不需要每次重新配对
                 checkPairingFile(silent: true)
+                autoConnect()
+            }
+            .onReceive(NotificationCenter.default.publisher(
+                for: UIApplication.willEnterForegroundNotification)) { _ in
+                // 回前台时隧道可能已断，自动重连
+                autoConnect()
             }
         }
     }
@@ -202,15 +208,22 @@ struct DirectInjectView: View {
         if log.count > 200 { log.removeLast() }
     }
 
-    private func openTunnel() async {
+    /// 有配对文件但隧道没建好时，自动建（用户不用手点 ①）
+    private func autoConnect() {
+        guard tunnelReady == false, busy == false, pairingURL != nil else { return }
+        status = "正在自动建立隧道…"
+        Task { await openTunnel(automatic: true) }
+    }
+
+    private func openTunnel(automatic: Bool = false) async {
         guard let url = pairingURL else { return }
         busy = true
 
         // ① 用 Bonjour 解析 _remotepairing._tcp 的地址和端口
         status = "正在解析配对端口…"
-        append("① 浏览 _remotepairing._tcp")
+        if automatic == false { append("① 浏览 _remotepairing._tcp") }
         let (port, hosts, note) = await RpPortResolver.shared.resolve()
-        append(note)
+        if automatic == false { append(note) }
 
         // 候选主机：先试解析出来的真实地址，最后才试 loopback。
         // 只连 127.0.0.1 有可能连到别的东西上（连上后被断开 → io 失败）。
@@ -227,7 +240,9 @@ struct DirectInjectView: View {
         }
 
         let portNum: Int32 = port.map { Int32($0) } ?? 0
-        append("② 开始建隧道（端口 \(port.map { String($0) } ?? "自动探测")，候选地址 \(candidates.joined(separator: ", "))）")
+        if automatic == false {
+            append("② 开始建隧道（端口 \(port.map { String($0) } ?? "自动探测")，候选地址 \(candidates.joined(separator: ", "))）")
+        }
         status = "正在建立隧道…"
 
         var lastMsg = ""
@@ -301,6 +316,11 @@ struct DirectInjectView: View {
         append("注入 \(String(format: "%.7f, %.7f", t.latitude, t.longitude))")
         // 优先走 DVT（iOS 27 上唯一可用的定位通路）
         var r = await TunnelBridge.injectDVT(lat: t.latitude, lon: t.longitude)
+        if r.ok == false && r.code == Int32(TunnelBridge.Code.noTunnel.rawValue) {
+            append("隧道已断，自动重连后重试…")
+            await openTunnel(automatic: true)
+            r = await TunnelBridge.injectDVT(lat: t.latitude, lon: t.longitude)
+        }
         if r.ok == false {
             append("DVT 通路失败，改试 CoreDevice: \(r.message)")
             r = await TunnelBridge.inject(lat: t.latitude, lon: t.longitude)
