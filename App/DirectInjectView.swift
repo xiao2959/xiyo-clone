@@ -227,10 +227,15 @@ struct DirectInjectView: View {
 
         // 候选主机：先试解析出来的真实地址，最后才试 loopback。
         // 只连 127.0.0.1 有可能连到别的东西上（连上后被断开 → io 失败）。
-        var candidates: [String] = []
+        // 10.7.0.1（utun 网关）是唯一能通的路径，放最前面先试
+        var candidates: [String] = ["10.7.0.1"]
         for h in hosts where h.isEmpty == false && candidates.contains(h) == false {
             candidates.append(h)
         }
+        // 去掉重复的 10.7.0.1
+        var seenC: [String] = []
+        for c in candidates where seenC.contains(c) == false { seenC.append(c) }
+        candidates = seenC
         // utun 网关（LocalDevVPN / 官方 VPN 扩展 用的是这个地址）
         if candidates.contains("10.7.0.1") == false {
             candidates.append("10.7.0.1")
@@ -278,8 +283,14 @@ struct DirectInjectView: View {
         }
 
         tunnelReady = false
-        status = "失败：建隧道失败"
-        append("❌ 全部候选地址都失败，最后一条：\(lastMsg)")
+        // 10.7.0.1 不通 = 没有 utun，几乎一定是 LocalDevVPN 没连上
+        if lastMsg.contains("EOF") || lastMsg.contains("超时") {
+            status = "请先打开 LocalDevVPN 并连接"
+            append("❌ 全部地址失败。10.7.0.1 需要 utun —— 请打开 LocalDevVPN，点连接，再回来点「① 建立隧道」")
+        } else {
+            status = "失败：建隧道失败"
+            append("❌ 全部候选地址都失败，最后一条：\(lastMsg)")
+        }
         busy = false
     }
 
