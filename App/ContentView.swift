@@ -52,6 +52,9 @@ struct ContentView: View {
     @State private var showDisclaimer = false
     @State private var showFavorites = false
     @State private var showHistory = false
+    @State private var showFavNamePrompt = false
+    @State private var favName = ""
+    @State private var favCoord: CLLocationCoordinate2D?
     @State private var coordText = ""
     @State private var toast = ""
 
@@ -107,6 +110,22 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showDisclaimer) {
             DisclaimerSheet()
+        }
+        .alert("给这个位置起个名字", isPresented: $showFavNamePrompt) {
+            TextField("例如：家 / 公司 / 学校", text: $favName)
+            Button("取消", role: .cancel) { favCoord = nil }
+            Button("收藏") {
+                if let c = favCoord {
+                    Favorites.add(c, name: favName)
+                    showBanner(ok: true, text: favName.isEmpty
+                               ? "已收藏" : "已收藏：「\(favName)」")
+                }
+                favCoord = nil
+            }
+        } message: {
+            if let c = favCoord {
+                Text(String(format: "%.6f, %.6f", c.latitude, c.longitude))
+            }
         }
         .alert("输入经纬度", isPresented: $showCoordInput) {
             TextField("36.7069, 119.1618", text: $coordText)
@@ -507,8 +526,10 @@ struct ContentView: View {
                       tint: .orange,
                       enabled: true) {
                 if let p = picked {
-                    Favorites.add(p)
-                    showBanner(ok: true, text: "已收藏")
+                    favCoord = p
+                    favName = ""
+                    showFavNamePrompt = true
+                    prefillFavoriteName(p)
                 } else {
                     showFavorites = true
                 }
@@ -615,6 +636,28 @@ struct ContentView: View {
         injectPoint = out
     }
 
+    /// 把坐标反查成地址，作为收藏名字的默认值
+    private func prefillFavoriteName(_ c: CLLocationCoordinate2D) {
+        let geo = CLGeocoder()
+        let loc = CLLocation(latitude: c.latitude, longitude: c.longitude)
+        geo.reverseGeocodeLocation(loc) { marks, _ in
+            guard let pm = marks?.first else { return }
+            var parts: [String] = []
+            if let n = pm.name, n.isEmpty == false { parts.append(n) }
+            if let t = pm.thoroughfare, t.isEmpty == false, parts.contains(t) == false {
+                parts.append(t)
+            }
+            if let l = pm.locality, l.isEmpty == false, parts.contains(l) == false {
+                parts.append(l)
+            }
+            let name = parts.joined(separator: " · ")
+            guard name.isEmpty == false else { return }
+            DispatchQueue.main.async {
+                if self.favName.isEmpty { self.favName = name }
+            }
+        }
+    }
+
     private func simulate() {
         guard let p = injectPoint else { return }
         guard license.isUsable else {
@@ -649,30 +692,91 @@ struct ContentView: View {
 
 // MARK: - 收藏
 
-enum Favorites {
-    private static let key = "favorites_v1"
+struct FavoriteItem: Codable, Identifiable {
+    var id: String { "\(lat),\(lon)" }
+    let lat: Double
+    let lon: Double
+    var name: String
+    let ts: TimeInterval
 
-    static func load() -> [String] {
-        UserDefaults.standard.stringArray(forKey: key) ?? []
+    var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: lat, longitude: lon)
+    }
+    var coordText: String {
+        String(format: "%.7f, %.7f", lat, lon)
+    }
+    var displayName: String {
+        name.isEmpty ? coordText : name
+    }
+}
+
+enum Favorites {
+    private static let key = "favorites_v2"
+    private static let legacyKey = "favorites_v1"
+
+    static func load() -> [FavoriteItem] {
+        let d = UserDefaults.standard
+        if let data = d.data(forKey: key),
+           let list = try? JSONDecoder().decode([FavoriteItem].self, from: data) {
+            return list
+        }
+        // 迁移旧版只有经纬度的收藏
+        if let old = d.stringArray(forKey: legacyKey), old.isEmpty == false {
+            var list: [FavoriteItem] = []
+            for s in old {
+                if let c = CoordInput.parse(s) {
+                    list.append(FavoriteItem(lat: c.latitude, lon: c.longitude,
+                                             name: "", ts: Date().timeIntervalSince1970))
+                }
+            }
+            save(list)
+            d.removeObject(forKey: legacyKey)
+            return list
+        }
+        return []
     }
 
-    static func add(_ c: CLLocationCoordinate2D) {
-        var list = load()
-        let s = String(format: "%.7f,%.7f", c.latitude, c.longitude)
-        if list.contains(s) == false {
-            list.insert(s, at: 0)
-            if list.count > 50 { list.removeLast() }
-            UserDefaults.standard.set(list, forKey: key)
+    static func save(_ list: [FavoriteItem]) {
+        if let data = try? JSONEncoder().encode(list) {
+            UserDefaults.standard.set(data, forKey: key)
         }
+    }
+
+    static func add(_ c: CLLocationCoordinate2D, name: String) {
+        var list = load()
+        let item = FavoriteItem(lat: c.latitude, lon: c.longitude,
+                                name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+                                ts: Date().timeIntervalSince1970)
+        if let i = list.firstIndex(where: { $0.id == item.id }) {
+            list[i] = item                 // 同一个点直接更新名字
+        } else {
+            list.insert(item, at: 0)
+            if list.count > 100 { list.removeLast() }
+        }
+        save(list)
+    }
+
+    static func rename(at index: Int, to name: String) {
+        var list = load()
+        guard index >= 0 && index < list.count else { return }
+        list[index].name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        save(list)
     }
 
     static func remove(at index: Int) {
         var list = load()
         guard index >= 0 && index < list.count else { return }
         list.remove(at: index)
-        UserDefaults.standard.set(list, forKey: key)
+        save(list)
+    }
+
+    static func remove(id: String) {
+        var list = load()
+        list.removeAll { $0.id == id }
+        save(list)
     }
 }
+
 
 // MARK: - 历史记录
 
@@ -812,31 +916,59 @@ struct HistorySheet: View {
 // MARK: - 收藏列表
 
 struct FavoritesSheet: View {
-    var onPick: (CLLocation) -> Void
+    var onPick: (CLLocationCoordinate2D) -> Void
     @Environment(\.dismiss) private var dismiss
-    @State private var items: [String] = Favorites.load()
+    @State private var items: [FavoriteItem] = Favorites.load()
+    @State private var renaming: FavoriteItem?
+    @State private var renameText = ""
 
     var body: some View {
         NavigationStack {
             List {
                 if items.isEmpty {
-                    Text("还没有收藏。在地图上选好点后点「收藏」。")
+                    Text("还没有收藏。\n在地图选好点后点「收藏」，可以给它起个名字。")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
-                ForEach(Array(items.enumerated()), id: \.offset) { idx, s in
+                ForEach(Array(items.enumerated()), id: \.offset) { idx, item in
                     Button {
-                        if let c = CoordInput.parse(s) {
-                            onPick(CLLocation(latitude: c.latitude, longitude: c.longitude))
-                            dismiss()
-                        }
+                        onPick(item.coordinate)
+                        dismiss()
                     } label: {
-                        Text(s).font(.footnote.monospaced())
+                        HStack(spacing: 10) {
+                            Image(systemName: "star.fill")
+                                .foregroundStyle(.orange)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(item.displayName)
+                                    .font(.subheadline.weight(.medium))
+                                    .foregroundStyle(.primary)
+                                Text(item.coordText)
+                                    .font(.system(.caption2, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
                     }
-                }
-                .onDelete { offsets in
-                    for i in offsets { Favorites.remove(at: i) }
-                    items = Favorites.load()
+                    .swipeActions(edge: .leading) {
+                        Button {
+                            renaming = item
+                            renameText = item.name
+                        } label: {
+                            Label("改名", systemImage: "pencil")
+                        }
+                        .tint(.blue)
+                    }
+                    .swipeActions(edge: .trailing) {
+                        Button(role: .destructive) {
+                            Favorites.remove(id: item.id)
+                            items = Favorites.load()
+                        } label: {
+                            Label("删除", systemImage: "trash")
+                        }
+                    }
                 }
             }
             .navigationTitle("收藏")
@@ -844,6 +976,21 @@ struct FavoritesSheet: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("完成") { dismiss() }
+                }
+            }
+            .alert("改个名字", isPresented: Binding(
+                get: { renaming != nil },
+                set: { if $0 == false { renaming = nil } }
+            )) {
+                TextField("例如：家 / 公司 / 学校", text: $renameText)
+                Button("取消", role: .cancel) { renaming = nil }
+                Button("保存") {
+                    if let r = renaming,
+                       let i = items.firstIndex(where: { $0.id == r.id }) {
+                        Favorites.rename(at: i, to: renameText)
+                        items = Favorites.load()
+                    }
+                    renaming = nil
                 }
             }
         }
