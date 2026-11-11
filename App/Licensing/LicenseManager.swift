@@ -120,11 +120,23 @@ final class LicenseManager: ObservableObject {
         return false
     }
 
-    /// 在线同步：按设备号查会员状态（启动时/刷新时调）
+    /// 在线同步：按设备号查会员状态（启动时 / 回前台 / 注入前调）
+    ///
+    /// 规则（和发卡面板严格对齐）：
+    ///   ret=0  → 有效，更新到期时间（续费立刻生效）
+    ///   ret=1  → 服务器说这台设备没有卡（被解绑）→ 立即锁
+    ///   ret=2  → 已过期 / 已锁定 / 已作废 → 立即锁
+    ///   ret=-1 → 网络或解析失败 → 保留本地状态，不误锁
     @discardableResult
     func syncRemote() async -> Bool {
         let r = await CardAPI.info()
-        if r.ok {
+
+        // 没连上服务器：离线容忍，保留本地判断
+        if r.reachable == false {
+            return state == .active
+        }
+
+        if r.ret == 0 {
             await MainActor.run {
                 self.remoteBound = true
                 self.permanentCard = r.permanent
@@ -132,11 +144,22 @@ final class LicenseManager: ObservableObject {
                 if self.code.isEmpty { self.code = r.account }
                 self.save()
                 self.refresh()
+                if self.lastMessage.isEmpty { self.lastMessage = "" }
             }
             return state == .active
         }
-        // 网络不通时保留本地状态，不要误锁
-        return state == .active
+
+        // 服务器明确说「没有有效会员」——立刻按服务器执行
+        await MainActor.run {
+            self.remoteBound = true
+            self.expireEpoch = 0
+            self.state = (r.ret == 1) ? .unactivated : .expired
+            self.lastMessage = r.message.isEmpty
+                ? (r.ret == 1 ? "这台设备已解绑，请重新激活" : "会员失效，请重新购买")
+                : r.message
+            self.save()
+        }
+        return false
     }
 
     /// 激活

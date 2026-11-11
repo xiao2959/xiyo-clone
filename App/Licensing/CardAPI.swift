@@ -44,6 +44,10 @@ enum CardAPI {
     }
 
     struct Info {
+        /// 0=有效 1=未激活/卡密不存在 2=已过期/已锁定/已作废 -1=网络或解析失败
+        var ret: Int = -1
+        /// 服务器是否真的回应了（用于区分「没网」和「服务器说没有」）
+        var reachable: Bool = false
         var ok: Bool = false
         var permanent: Bool = false
         /// 到期毫秒；0 表示永久
@@ -101,6 +105,7 @@ enum CardAPI {
 
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
+            _ = data
             guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else {
                 return Info(ok: false, message: "服务器返回异常")
             }
@@ -117,6 +122,8 @@ enum CardAPI {
     private static func parse(_ obj: [String: Any]) -> Info {
         var info = Info()
         let ret = (obj["ret"] as? NSNumber)?.intValue ?? -1
+        info.ret = ret
+        info.reachable = true
         info.message = (obj["msg"] as? String) ?? ""
 
         guard ret == 0 else {

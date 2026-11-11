@@ -83,6 +83,8 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(
             for: UIApplication.willEnterForegroundNotification)) { _ in
             tunnel.refresh()
+            // 回前台同步会员状态：面板里锁定/解绑/续费都能立刻生效
+            Task { _ = await license.syncRemote() }
         }
         .sheet(isPresented: $showSearch) {
             SearchSheet(search: search) { c in jump(to: c) }
@@ -561,6 +563,14 @@ struct ContentView: View {
             return
         }
         Task {
+            // 注入前先跟服务器确认一次会员状态（锁定/解绑会立刻拦住）
+            _ = await license.syncRemote()
+            if license.isUsable == false {
+                showBanner(ok: false, text: license.lastMessage.isEmpty
+                           ? "会员已失效，请重新激活" : license.lastMessage)
+                showLicense = true
+                return
+            }
             // 没隧道就先建，再注入
             if tunnel.tunnelReady == false {
                 showBanner(ok: true, text: "正在建立隧道…")
