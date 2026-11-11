@@ -432,6 +432,24 @@ pub extern "C" fn tunnel_diag(out_buf: *mut c_char, cap: i32) -> i32 {
     write_out(out_buf, cap, &s)
 }
 
+/// 隧道是否还持有（1 = 还在，0 = 没了）
+///
+/// Swift 侧 @State 在视图重建时会丢，但 Rust 里隧道可能仍然活着。
+/// 进页面先问这个，避免无谓地重连。
+#[no_mangle]
+pub extern "C" fn tunnel_alive(out_buf: *mut c_char, cap: i32) -> i32 {
+    let alive = held()
+        .lock()
+        .map(|g| g.tunnel.is_some())
+        .unwrap_or(false);
+    write_out(
+        out_buf,
+        cap,
+        if alive { "隧道保持中" } else { "隧道未建立" },
+    );
+    if alive { 1 } else { 0 }
+}
+
 #[no_mangle]
 pub extern "C" fn tunnel_close() -> i32 {
     let mut g = held().lock().unwrap();

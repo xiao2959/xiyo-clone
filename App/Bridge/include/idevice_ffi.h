@@ -58,6 +58,9 @@ int32_t tunnel_clear(char *out_buf, int32_t cap);
  * 定位模拟走 DVT。连接必须保持，断开即停止模拟。
  */
 int32_t tunnel_inject_dvt(double lat, double lon, char *out_buf, int32_t cap);
+
+/* 隧道是否还持有：1 = 在，0 = 没了 */
+int32_t tunnel_alive(char *out_buf, int32_t cap);
 int32_t tunnel_clear_dvt(char *out_buf, int32_t cap);
 
 // 列出全部 RSD 服务名（排查用）

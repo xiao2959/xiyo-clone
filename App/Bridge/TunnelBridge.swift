@@ -89,6 +89,12 @@ enum TunnelBridge {
         }
     }
 
+    /// 隧道是否还持有（1 = 在）
+    static func alive() -> Bool {
+        var buf = [CChar](repeating: 0, count: 256)
+        return tunnel_alive(&buf, Int32(buf.count)) == 1
+    }
+
     /// DVT 通路注入（iOS 27 实际可用的路径）
     static func injectDVT(lat: Double, lon: Double) async -> Result {
         await call {

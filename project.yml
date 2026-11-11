@@ -48,6 +48,9 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.lab.xiyoclone
         INFOPLIST_FILE: App/Info.plist
+        # 图标（App/Assets.xcassets/AppIcon.appiconset）
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: ""
         # 不需要任何特殊 entitlement（无扩展、无 VPN 配置）
         CODE_SIGN_ENTITLEMENTS: ""
         # Rust 静态库的 C ABI

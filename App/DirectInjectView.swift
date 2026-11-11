@@ -209,8 +209,23 @@ struct DirectInjectView: View {
     }
 
     /// 有配对文件但隧道没建好时，自动建（用户不用手点 ①）
+    ///
+    /// 注意：@State 的 tunnelReady 在视图重建时会丢，但 Rust 里的隧道可能还活着。
+    /// 所以先问 Rust，活着就直接复用，不要无谓重连。
     private func autoConnect() {
-        guard tunnelReady == false, busy == false, pairingURL != nil else { return }
+        guard busy == false else { return }
+
+        if TunnelBridge.alive() {
+            if tunnelReady == false {
+                tunnelReady = true
+                status = "隧道保持中（已复用）"
+                append("隧道仍在保持，直接复用，不用重连")
+            }
+            BackgroundKeeper.shared.start()
+            return
+        }
+
+        guard tunnelReady == false, pairingURL != nil else { return }
         status = "正在自动建立隧道…"
         Task { await openTunnel(automatic: true) }
     }
@@ -258,6 +273,8 @@ struct DirectInjectView: View {
                                            pairingPath: url.path)
             if r.ok {
                 tunnelReady = true
+                // 用持续定位保活，避免切后台被挂起导致连接断掉
+                BackgroundKeeper.shared.start()
                 status = "隧道已建立，可以注入了"
                 append("✅ [\(r.code)] \(r.message)")
                 // 把完整服务列表传到服务器，方便远端排查（不用截图）
