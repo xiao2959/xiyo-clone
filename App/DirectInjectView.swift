@@ -49,7 +49,8 @@ struct DirectInjectView: View {
                     Button {
                         showPairing = true
                     } label: {
-                        Label("生成配对文件（App 内配对）", systemImage: "person.badge.key")
+                        Label(pairingURL == nil ? "生成配对文件（App 内配对）" : "重新配对",
+                              systemImage: "person.badge.key")
                             .fontWeight(.semibold)
                     }
                     Button {
@@ -165,22 +166,30 @@ struct DirectInjectView: View {
                     append("选择失败: \(e.localizedDescription)")
                 }
             }
-            .sheet(isPresented: $showPairing, onDismiss: checkPairingFile) {
+            .sheet(isPresented: $showPairing, onDismiss: { checkPairingFile() }) {
                 PairingView()
+            }
+            .onAppear {
+                // 配对文件是持久化的，进页面就沿用，不需要每次重新配对
+                checkPairingFile(silent: true)
             }
         }
     }
 
     /// 配对页关闭后，检查 App 内是否已生成 pairing.plist，有就自动选上
-    private func checkPairingFile() {
+    private func checkPairingFile(silent: Bool = false) {
         let path = Bridge.pairingPath
         guard FileManager.default.fileExists(atPath: path) else {
-            append("配对页已关闭，但还没生成配对文件")
+            if silent == false { append("配对页已关闭，但还没生成配对文件") }
             return
         }
         let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? nil
         pairingURL = URL(fileURLWithPath: path)
-        append("已自动载入配对文件（\(size ?? 0) 字节）")
+        if silent {
+            append("已载入已保存的配对文件（\(size ?? 0) 字节），不用重新配对")
+        } else {
+            append("已自动载入配对文件（\(size ?? 0) 字节）")
+        }
         status = "配对文件就绪，可以建隧道了"
     }
 
