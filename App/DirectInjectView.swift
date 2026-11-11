@@ -233,6 +233,13 @@ struct DirectInjectView: View {
                 append("✅ [\(r.code)] \(r.message)")
                 // 把完整服务列表传到服务器，方便远端排查（不用截图）
                 let svc = await TunnelBridge.services()
+                let ls = svc.split(separator: "\n").map(String.init)
+                let cdN = ls.filter { $0.lowercased().contains("coredevice") }.count
+                let dtN = ls.filter { $0.lowercased().contains(".dt.") || $0.lowercased().contains("instruments") }.count
+                append("服务统计: 共 \(ls.count) 个，coredevice=\(cdN) 个，dt/instruments=\(dtN) 个")
+                if cdN > 0 {
+                    for l in ls where l.lowercased().contains("coredevice") { append("  ★ " + l) }
+                }
                 uploadDiag(host: host, diag: r.message, services: svc)
                 busy = false
                 return
@@ -254,11 +261,26 @@ struct DirectInjectView: View {
 
     /// 把诊断信息 POST 到实验服务器（失败静默忽略，不影响使用）
     private func uploadDiag(host: String, diag: String, services: String) {
-        guard let url = URL(string: "http://103.119.2.243/upload/lab2026/services.txt") else { return }
+        guard let url = URL(string: "https://103-119-2-243.sslip.io/upload/lab2026/services.txt") else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.timeoutInterval = 15
-        let body = "host=\(host)\n--- diag ---\n\(diag)\n--- services ---\n\(services)\n"
+        let lines = services.split(separator: "\n").map(String.init)
+        let cd = lines.filter { $0.lowercased().contains("coredevice") }
+        let dt = lines.filter { $0.lowercased().contains(".dt.") || $0.lowercased().contains("instruments") }
+        let body = """
+        host=\(host)
+        --- diag ---
+        \(diag)
+        --- counts ---
+        total=\(lines.count) coredevice=\(cd.count) dt=\(dt.count)
+        --- coredevice ---
+        \(cd.joined(separator: "\n"))
+        --- dt ---
+        \(dt.joined(separator: "\n"))
+        --- services ---
+        \(services)
+        """
         req.httpBody = body.data(using: .utf8)
         URLSession.shared.dataTask(with: req) { _, _, _ in }.resume()
     }
