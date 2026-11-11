@@ -768,8 +768,8 @@ struct ContentView: View {
         }
         // 蜂窝网络下先提醒开飞行模式（这是官方版的做法，也是不被检测的关键）
         if netWatch.shouldWarnAirplane {
-            status = "待确认：是否开飞行模式"
-            append("检测到蜂窝网络，弹窗确认中")
+            tunnel.status = "待确认：是否开飞行模式"
+            tunnel.append("检测到蜂窝网络，弹窗确认中")
             showAirplaneWarn = true
             return
         }
