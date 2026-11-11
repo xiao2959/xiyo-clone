@@ -161,6 +161,32 @@ pub async fn usbmuxd_connect(port: u16) -> Result<TcpStream, String> {
     Ok(s)
 }
 
+/// 纯诊断：连上去后先不写任何东西，等 1.2 秒看对端说不说话。
+///
+/// 这一步能区分三种情况：
+///   - 立刻 EOF        → 端口上有东西，但它不接受我们（服务不对 / 需要前提）
+///   - 先说了一段数据   → 我们该先读再写（协议顺序错）
+///   - 沉默            → 服务在等我们先说话（那就该我们发）
+pub async fn probe_silence(host: &str, port: u16) -> String {
+    use tokio::io::AsyncReadExt;
+    let addr = format!("{host}:{port}");
+    let mut s = match tokio::time::timeout(Duration::from_secs(3), TcpStream::connect(&addr)).await {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => return format!("{addr} 连不上({:?})", e.kind()),
+        Err(_) => return format!("{addr} 连接超时"),
+    };
+    let mut buf = [0u8; 64];
+    match tokio::time::timeout(Duration::from_millis(1200), s.read(&mut buf)).await {
+        Ok(Ok(0)) => format!("{addr} 连上后立刻被关闭(EOF)"),
+        Ok(Ok(n)) => {
+            let hex: Vec<String> = buf[..n.min(16)].iter().map(|b| format!("{:02x}", b)).collect();
+            format!("{addr} 对端先发 {n} 字节 [{}]", hex.join(" "))
+        }
+        Ok(Err(e)) => format!("{addr} 读失败({:?})", e.kind()),
+        Err(_) => format!("{addr} 连上后沉默 1.2s"),
+    }
+}
+
 /// 先试直连，失败再走 usbmuxd
 async fn connect_to_device_port(host: &str, port: u16) -> Result<TcpStream, String> {
     let addr = format!("{}:{}", host, port);
@@ -310,6 +336,10 @@ pub async fn open_tunnel(
     //    originatedBy 到底该发 "host" 还是 "device"，库里的注释两处方向不同，
     //    与其猜，不如两个都试：先按「我方主动连设备 = host」，
     //    失败再翻转成 "device"。哪个成功，错误信息里会带出来。
+    // 先做一次静默探测，结果写进日志（判断端口到底是不是那个服务）
+    let silence = probe_silence(host, port).await;
+    eprintln!("[tunnel] 静默探测: {silence}");
+
     // 4 种组合依次试，哪个成功用哪个（一次构建把可能性都覆盖掉）
     const COMBOS: &[(Framing, Handshake)] = &[
         (Framing::Xpc, Handshake::ValidateOnly),
@@ -337,7 +367,7 @@ pub async fn open_tunnel(
         }
     }
     let (listener_port, key) = got.ok_or_else(|| {
-        format!("4 种握手组合都失败 —— {}", errs.join(" ／ "))
+        format!("4 种握手组合都失败 —— {} ｜ 静默探测: {}", errs.join(" ／ "), silence)
     })?;
 
     // 5) 连到那个监听端口

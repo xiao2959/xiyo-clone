@@ -209,6 +209,10 @@ struct DirectInjectView: View {
         for h in hosts where h.isEmpty == false && candidates.contains(h) == false {
             candidates.append(h)
         }
+        // utun 网关（LocalDevVPN / 官方 VPN 扩展 用的是这个地址）
+        if candidates.contains("10.7.0.1") == false {
+            candidates.append("10.7.0.1")
+        }
         if candidates.contains("127.0.0.1") == false {
             candidates.append("127.0.0.1")
         }
