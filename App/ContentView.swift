@@ -210,9 +210,16 @@ struct ContentView: View {
             }
             tile(icon: "lock.open.fill",
                  tint: .teal,
-                 title: "VPN",
-                 subtitle: (tunnel.vpnUp ?? tunnel.tunnelReady) ? "已开启" : "未开启") {
-                toast = "请打开 LocalDevVPN 并点「连接」"
+                 title: "LocalDevVPN",
+                 subtitle: (tunnel.vpnUp ?? tunnel.tunnelReady) ? "已连接" : "未连接") {
+                if (tunnel.vpnUp ?? tunnel.tunnelReady) {
+                    showBanner(ok: true, text: "LocalDevVPN 已连接")
+                } else {
+                    // 打开图文教程（含港区 Apple ID 注册 + App Store 直达）
+                    if let u = URL(string: "https://103-119-2-243.sslip.io/vpn/") {
+                        UIApplication.shared.open(u)
+                    }
+                }
             }
             tile(icon: "play.fill",
                  tint: .green,
@@ -327,6 +334,24 @@ struct ContentView: View {
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
                         .background(Color.orange, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+                if tunnel.vpnUp == false {
+                    Button {
+                        if let u = URL(string: "https://103-119-2-243.sslip.io/vpn/") {
+                            UIApplication.shared.open(u)
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "lock.open.fill").font(.caption)
+                            Text("LocalDevVPN 没连 · 点此安装/连接").font(.footnote.weight(.medium))
+                            Image(systemName: "chevron.right").font(.caption2)
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(Color.blue, in: Capsule())
                     }
                     .buttonStyle(.plain)
                 }
