@@ -54,6 +54,11 @@ struct ContentView: View {
     @State private var coordText = ""
     @State private var toast = ""
 
+    // 模拟结果提示条
+    @State private var bannerOK: Bool = true
+    @State private var bannerText: String = ""
+    @State private var bannerVisible: Bool = false
+
     private var mode: InjectMode { InjectMode(rawValue: modeRaw) ?? .autoGCJ }
 
     var body: some View {
@@ -317,6 +322,10 @@ struct ContentView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
                     .background(.ultraThinMaterial, in: Capsule())
+                if bannerVisible {
+                    resultBanner
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
                 bottomButtons
             }
             .padding(.horizontal, 14)
@@ -363,6 +372,37 @@ struct ContentView: View {
             .background(.regularMaterial, in: Capsule())
     }
 
+    /// 模拟结果提示条：成功绿色、失败红色，3.5 秒自动消失
+    private var resultBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: bannerOK ? "checkmark.circle.fill" : "xmark.octagon.fill")
+                .font(.system(size: 18))
+            Text(bannerText)
+                .font(.subheadline.weight(.medium))
+                .lineLimit(3)
+                .multilineTextAlignment(.leading)
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(bannerOK ? Color.green : Color.red,
+                    in: RoundedRectangle(cornerRadius: 14))
+        .shadow(radius: 6, y: 2)
+        .onTapGesture {
+            withAnimation { bannerVisible = false }
+        }
+    }
+
+    private func showBanner(ok: Bool, text: String) {
+        bannerOK = ok
+        bannerText = text
+        withAnimation(.spring(duration: 0.25)) { bannerVisible = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) {
+            withAnimation { bannerVisible = false }
+        }
+    }
+
     private var bottomButtons: some View {
         HStack(spacing: 10) {
             bigButton(title: "模拟",
@@ -375,14 +415,21 @@ struct ContentView: View {
                       icon: "xmark",
                       tint: .red,
                       enabled: true) {
-                Task { await tunnel.clear() }
+                Task {
+                    await tunnel.clear()
+                    showBanner(ok: true, text: "已清除，恢复真实定位")
+                }
             }
             bigButton(title: "收藏",
                       icon: "star",
                       tint: .orange,
                       enabled: true) {
-                if let p = picked { Favorites.add(p); toast = "已收藏" }
-                else { showFavorites = true }
+                if let p = picked {
+                    Favorites.add(p)
+                    showBanner(ok: true, text: "已收藏")
+                } else {
+                    showFavorites = true
+                }
             }
         }
     }
@@ -495,9 +542,16 @@ struct ContentView: View {
         Task {
             // 没隧道就先建，再注入
             if tunnel.tunnelReady == false {
+                showBanner(ok: true, text: "正在建立隧道…")
                 await tunnel.connect()
             }
-            _ = await tunnel.inject(lat: p.latitude, lon: p.longitude)
+            let ok = await tunnel.inject(lat: p.latitude, lon: p.longitude)
+            if ok {
+                let c = String(format: "%.7f, %.7f", p.latitude, p.longitude)
+                showBanner(ok: true, text: "模拟成功\n" + c)
+            } else {
+                showBanner(ok: false, text: "模拟失败：" + tunnel.status)
+            }
         }
     }
 }
