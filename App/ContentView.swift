@@ -127,13 +127,14 @@ struct ContentView: View {
             DisclaimerSheet()
         }
         .alert("请先开启飞行模式", isPresented: $showAirplaneWarn) {
-            Button("我去开启", role: .cancel) {}
-            Button("已开启，继续模拟") {
-                // 再检查一次：如果还是蜂窝，说明飞行模式没生效
-                if netWatch.onCellular {
-                    showAirplaneWarn = true
-                    return
-                }
+            Button("我去开启", role: .cancel) {
+                showBanner(ok: true, text: "开好飞行模式后再点一次「模拟」")
+            }
+            Button("已开启，继续") {
+                Task { await runInject() }
+            }
+            Button("不开直接模拟") {
+                // 不强制：有些场景开不了飞行模式（比如需要接电话）
                 Task { await runInject() }
             }
         } message: {
@@ -669,6 +670,8 @@ struct ContentView: View {
                     LabeledContent("配对文件", value: tunnel.hasPairing ? "已导入" : "未导入")
                     LabeledContent("VPN", value: (tunnel.vpnUp ?? tunnel.tunnelReady) ? "已开启" : "未开启")
                     LabeledContent("隧道", value: tunnel.tunnelReady ? "已连接" : "未连接")
+                    LabeledContent("模拟保持",
+                                   value: tunnel.lastCoord == nil ? "未启用" : "已开启（每 8 秒刷新）")
                     LabeledContent("状态", value: tunnel.status)
                 }
 
@@ -765,6 +768,8 @@ struct ContentView: View {
         }
         // 蜂窝网络下先提醒开飞行模式（这是官方版的做法，也是不被检测的关键）
         if netWatch.shouldWarnAirplane {
+            status = "待确认：是否开飞行模式"
+            append("检测到蜂窝网络，弹窗确认中")
             showAirplaneWarn = true
             return
         }
@@ -795,8 +800,10 @@ struct ContentView: View {
             : await tunnel.inject(lat: p.latitude, lon: p.longitude)
         if ok {
             History.add(lat: p.latitude, lon: p.longitude)
+            // 开始保活：防止切后台后位置跳回
+            tunnel.startKeepAlive()
             let c = String(format: "%.7f, %.7f", p.latitude, p.longitude)
-            showBanner(ok: true, text: "模拟成功\n" + c)
+            showBanner(ok: true, text: "模拟成功·已开启保活\n" + c)
         } else {
             showBanner(ok: false, text: "模拟失败：" + tunnel.status)
         }

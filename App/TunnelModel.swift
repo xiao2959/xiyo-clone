@@ -36,6 +36,11 @@ final class TunnelModel: ObservableObject {
 
     private let logger = Logger(subsystem: "com.lab.xiyoclone", category: "tunnel")
 
+    /// 保活定时器：每隔几秒重发一次坐标，保证位置不跳回
+    private var keepTask: Task<Void, Never>?
+    /// 保活间隔（秒）
+    private let keepInterval: UInt64 = 8
+
     /// utun 网关：LocalDevVPN 建出来的隧道，设备的 remotepairingd 只能从这里进
     private let utunGateway = "10.7.0.1"
 
@@ -210,7 +215,48 @@ final class TunnelModel: ObservableObject {
         return true
     }
 
+    // MARK: - 模拟保持
+
+    /// 注入成功后启动保活：
+    ///   · 会话还在 → 每 8 秒重发一次坐标（App 重读也不会跳回）
+    ///   · 会话断了 → 自动重建隧道并恢复坐标
+    func startKeepAlive() {
+        keepTask?.cancel()
+        keepTask = Task { [weak self] in
+            while Task.isCancelled == false {
+                try? await Task.sleep(nanoseconds: (self?.keepInterval ?? 8) * 1_000_000_000)
+                if Task.isCancelled { return }
+                await self?.keepAliveTick()
+            }
+        }
+        append("保活已开启（每 \(keepInterval)s 刷新一次位置）")
+    }
+
+    func stopKeepAlive() {
+        keepTask?.cancel()
+        keepTask = nil
+    }
+
+    private func keepAliveTick() async {
+        guard let c = lastCoord else { return }
+
+        if TunnelBridge.alive() {
+            _ = await TunnelBridge.moveDVT(lat: c.0, lon: c.1)
+            return
+        }
+
+        // 会话没了：重建隧道并恢复坐标
+        append("保活：发现隧道断了，正在重建…")
+        tunnelReady = false
+        await connect()
+        if tunnelReady {
+            let ok = await inject(lat: c.0, lon: c.1)
+            append(ok ? "保活：已恢复位置" : "保活：恢复失败")
+        }
+    }
+
     func clear() async {
+        stopKeepAlive()
         _ = await TunnelBridge.clearDVT()
         _ = await TunnelBridge.clear()
         lastInjected = nil
@@ -229,6 +275,7 @@ final class TunnelModel: ObservableObject {
     // MARK: - 断开
 
     func disconnect() async {
+        stopKeepAlive()
         _ = await TunnelBridge.clearDVT()
         await TunnelBridge.close()
         tunnelReady = false
