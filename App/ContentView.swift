@@ -15,9 +15,9 @@ import UIKit
 
 /// 注入坐标的模式。选对一次，以后一直对。
 enum InjectMode: String, CaseIterable, Identifiable {
-    case autoGCJ = "自动换算 GCJ→WGS"
-    case raw     = "原样注入（不换算）"
-    case reverse = "反向换算 WGS→GCJ"
+    case autoGCJ = "标准模式（自动换算 GCJ→WGS）"
+    case raw     = "兼容模式（原样注入）"
+    case reverse = "反向模式（WGS→GCJ）"
 
     var id: String { rawValue }
 
@@ -416,7 +416,7 @@ struct ContentView: View {
                     coordChip(p)
                     nudgeBar()
                 }
-                Text("长按地图选择位置")
+                Text("长按地图选择位置（或点右上角 # 输入经纬度）")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 12)
@@ -761,7 +761,13 @@ struct ContentView: View {
     }
 
     private func simulate() {
-        guard let p = injectPoint else { return }
+        guard let p = injectPoint else {
+            // 不能静默返回：用户看不到任何反应就会以为“没用”
+            tunnel.status = "请先选一个位置"
+            tunnel.append("未选点，已提示用户")
+            showBanner(ok: false, text: "请先长按地图选一个位置\n或点右上角 # 输入经纬度")
+            return
+        }
         guard license.isUsable else {
             showLicense = true
             return
@@ -779,7 +785,10 @@ struct ContentView: View {
 
     /// 真正做注入（弹窗确认后也走这里）
     private func runInject() async {
-        guard let p = injectPoint else { return }
+        guard let p = injectPoint else {
+            showBanner(ok: false, text: "请先长按地图选一个位置")
+            return
+        }
 
         // 注入前先跟服务器确认一次会员状态（锁定/解绑会立刻拦住）
         _ = await license.syncRemote()
