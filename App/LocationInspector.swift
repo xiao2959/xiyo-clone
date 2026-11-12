@@ -108,4 +108,45 @@ final class LocationInspector: NSObject, ObservableObject, CLLocationManagerDele
         }
         return "等待第一次定位…"
     }
+
+    // MARK: - 环境自查（企业微信类 App 能看到的东西）
+
+    /// 是否有 utun 虚拟网卡（=有 VPN 在运行）
+    func hasTunnelInterface() -> (Bool, [String]) {
+        var addrs: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&addrs) == 0, let first = addrs else { return (false, []) }
+        defer { freeifaddrs(addrs) }
+        var names: Set<String> = []
+        var cur = first
+        while true {
+            let name = String(cString: cur.pointee.ifa_name)
+            if name.hasPrefix("utun") || name.hasPrefix("ipsec") {
+                names.insert(name)
+            }
+            guard let next = cur.pointee.ifa_next else { break }
+            cur = next
+        }
+        return (!names.isEmpty, names.sorted())
+    }
+
+    /// 系统代理是否开着
+    func proxySettings() -> (Bool, String) {
+        guard let cf = CFNetworkCopySystemProxySettings()?.takeRetainedValue(),
+              let d = cf as? [String: Any] else { return (false, "读不到") }
+        var on = false
+        var parts: [String] = []
+        if let http = d["HTTPEnable"] as? Int, http == 1 {
+            on = true; parts.append("HTTP")
+        }
+        if let https = d["HTTPSEnable"] as? Int, https == 1 {
+            on = true; parts.append("HTTPS")
+        }
+        if let pac = d["ProxyAutoConfigEnable"] as? Int, pac == 1 {
+            on = true; parts.append("PAC")
+        }
+        if let socks = d["SOCKSEnable"] as? Int, socks == 1 {
+            on = true; parts.append("SOCKS")
+        }
+        return (on, parts.isEmpty ? "无" : parts.joined(separator: " + "))
+    }
 }

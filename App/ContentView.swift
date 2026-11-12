@@ -691,6 +691,13 @@ struct ContentView: View {
                         LabeledContent("设备标记·外设提供",
                                        value: insp.producedByAccessory == true ? "是 ⚠️"
                                               : (insp.producedByAccessory == false ? "否 ✅" : "系统未提供"))
+                        LabeledContent("VPN网卡",
+                                       value: insp.hasTunnelInterface().0
+                                              ? insp.hasTunnelInterface().1.joined(separator: ",")
+                                              : "无")
+                        LabeledContent("系统代理",
+                                       value: insp.proxySettings().0
+                                              ? insp.proxySettings().1 : "无")
                         Text(insp.verdict)
                             .font(.caption)
                             .foregroundStyle(insp.simulatedBySoftware == true || insp.producedByAccessory == true
