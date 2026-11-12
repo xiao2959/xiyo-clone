@@ -23,8 +23,8 @@ enum CardAPI {
     /// 接口入口：首选香港中转（国内快，实测 0.05s），
     /// 失败自动回退直连域名。两个都不通时才判定没网。
     static let bases = [
-        "https://card.103-119-2-243.sslip.io",   // 香港中转
-        "https://xiaoios.icu",                   // 直连（备用）
+        "https://xiaoios.icu",                   // 主：正式域名，国内 DNS 能解析
+        "https://card.103-119-2-243.sslip.io",   // 备：香港中转，主域名线路差时用
     ]
     static var base: String { bases[0] }
 
@@ -117,7 +117,7 @@ enum CardAPI {
         }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
-        req.timeoutInterval = 12
+        req.timeoutInterval = 8
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
