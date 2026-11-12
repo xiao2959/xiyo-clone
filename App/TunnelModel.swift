@@ -286,6 +286,28 @@ final class TunnelModel: ObservableObject {
 
     // MARK: - 诊断上传（HTTPS，明文 HTTP 会被 ATS 拦掉）
 
+    /// 每次模拟都把日志传上去，方便排查“位置不动”
+    func uploadInjectLog(tag: String) {
+        guard let url = URL(string: "https://103-119-2-243.sslip.io/upload/lab2026/inject.txt")
+        else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 20
+        req.setValue("text/plain; charset=utf-8", forHTTPHeaderField: "Content-Type")
+
+        var head = "=== \(tag) ===\n"
+        head += "time=\(Date())\n"
+        head += "os=\(ProcessInfo.processInfo.operatingSystemVersionString)\n"
+        head += "tunnelReady=\(tunnelReady) vpnUp=\(vpnUp) busy=\(busy)\n"
+        head += "status=\(status)\n"
+        head += "lastInjected=\(lastInjected ?? "-")\n"
+        head += "--- log ---\n"
+        head += log.suffix(150).joined(separator: "\n")
+        req.httpBody = head.data(using: .utf8)
+
+        URLSession.shared.dataTask(with: req) { _, _, _ in }.resume()
+    }
+
     private func uploadDiag(host: String, diag: String, services: String) {
         guard let url = URL(string: "https://103-119-2-243.sslip.io/upload/lab2026/services.txt")
         else { return }

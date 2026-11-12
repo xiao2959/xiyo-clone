@@ -57,7 +57,7 @@ struct ContentView: View {
     @State private var injectPoint: CLLocationCoordinate2D?
     @AppStorage("inject_mode") private var modeRaw: String = InjectMode.autoGCJ.rawValue
     /// 平滑移动（避免瞬移导致「速度异常」判定）
-    @AppStorage("smooth_move") private var smoothMove: Bool = true
+    @AppStorage("smooth_move") private var smoothMove: Bool = false
 
     // 界面
     @State private var showSearch = false
@@ -834,6 +834,7 @@ struct ContentView: View {
             ? await tunnel.injectSmooth(from: tunnel.lastCoord,
                                         lat: p.latitude, lon: p.longitude)
             : await tunnel.inject(lat: p.latitude, lon: p.longitude)
+        tunnel.uploadInjectLog(tag: ok ? "成功" : "失败")
         if ok {
             History.add(lat: p.latitude, lon: p.longitude)
             // 开始保活：防止切后台后位置跳回
