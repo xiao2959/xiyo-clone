@@ -154,13 +154,21 @@ final class TunnelModel: ObservableObject {
         }
 
         status = "正在注入…"
+
+        // 官方的调用顺序是先 stopLocationSimulation 再 simulateLocation。
+        // 不先停的话，旧模拟还占着，新坐标会被忽略（表现就是“位置不动”）。
+        _ = await TunnelBridge.clearDVT()
+        try? await Task.sleep(nanoseconds: 120_000_000)
+
         var r = await TunnelBridge.injectDVT(lat: lat, lon: lon)
 
         // 隧道断了就自动重连再试一次
         if r.ok == false {
             append("DVT 失败：\(r.message)")
             status = "隧道可能断了，正在重连…"
+            _ = await TunnelBridge.clearDVT()
             await connectAfterFailure()
+            try? await Task.sleep(nanoseconds: 200_000_000)
             r = await TunnelBridge.injectDVT(lat: lat, lon: lon)
         }
 
