@@ -47,6 +47,7 @@ struct ContentView: View {
     @StateObject private var mapState = MapState()
     @StateObject private var search = SearchModel()
     @StateObject private var netWatch = NetWatch()
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var insp = LocationInspector()
     @State private var showAirplaneWarn = false
     /// 微调步长（米）
@@ -91,6 +92,12 @@ struct ContentView: View {
                 .tabItem { Label("验证", systemImage: "checkmark.seal.fill") }
         }
         .tint(.blue)
+        .onChange(of: scenePhase) { _, phase in
+            // 切到后台的瞬间再注一次，避免刚切过去时被系统回退到真实位置
+            if phase == .background, let c = tunnel.lastCoord {
+                Task { _ = await TunnelBridge.moveDVT(lat: c.0, lon: c.1) }
+            }
+        }
         .task {
             // 启动时按设备号同步一次会员状态（网络不通就保留本地状态）
             _ = await license.syncRemote()
@@ -844,7 +851,7 @@ struct ContentView: View {
         if ok {
             // 注入成功后采一次系统定位真值，一并上传
             insp.start()
-            try? await Task.sleep(nanoseconds: 1_800_000_000)
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
             tunnel.uploadInjectLog(tag: "成功", extra: insp.snapshotText())
             insp.stop()
         } else {

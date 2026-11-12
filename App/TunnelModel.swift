@@ -39,7 +39,7 @@ final class TunnelModel: ObservableObject {
     /// 保活定时器：每隔几秒重发一次坐标，保证位置不跳回
     private var keepTask: Task<Void, Never>?
     /// 保活间隔（秒）
-    private let keepInterval: UInt64 = 8
+    private let keepInterval: UInt64 = 2
 
     /// utun 网关：LocalDevVPN 建出来的隧道，设备的 remotepairingd 只能从这里进
     private let utunGateway = "10.7.0.1"
