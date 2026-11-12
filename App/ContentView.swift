@@ -841,7 +841,15 @@ struct ContentView: View {
             ? await tunnel.injectSmooth(from: tunnel.lastCoord,
                                         lat: p.latitude, lon: p.longitude)
             : await tunnel.inject(lat: p.latitude, lon: p.longitude)
-        tunnel.uploadInjectLog(tag: ok ? "成功" : "失败")
+        if ok {
+            // 注入成功后采一次系统定位真值，一并上传
+            insp.start()
+            try? await Task.sleep(nanoseconds: 1_800_000_000)
+            tunnel.uploadInjectLog(tag: "成功", extra: insp.snapshotText())
+            insp.stop()
+        } else {
+            tunnel.uploadInjectLog(tag: "失败")
+        }
         if ok {
             History.add(lat: p.latitude, lon: p.longitude)
             // 开始保活：防止切后台后位置跳回

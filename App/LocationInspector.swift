@@ -149,4 +149,23 @@ final class LocationInspector: NSObject, ObservableObject, CLLocationManagerDele
         }
         return (on, parts.isEmpty ? "无" : parts.joined(separator: " + "))
     }
+
+    /// 把当前系统定位字段打成一段文本（用于上传排查）
+    func snapshotText() -> String {
+        var out = ""
+        out += "coords=\(String(format: "%.7f,%.7f", lat, lon))\n"
+        out += "accuracy=\(String(format: "%.2f", accuracy))\n"
+        out += "altitude=\(String(format: "%.2f", altitude))\n"
+        out += "speed=\(String(format: "%.2f", speed))\n"
+        out += "course=\(String(format: "%.2f", course))\n"
+        out += "age=\(ageText)\n"
+        out += "auth=\(authText)\n"
+        out += "simulated=\(simulatedBySoftware.map { $0 ? "是" : "否" } ?? "未提供")\n"
+        out += "accessory=\(producedByAccessory.map { $0 ? "是" : "否" } ?? "未提供")\n"
+        let ut = hasTunnelInterface()
+        out += "utun=\(ut.0 ? ut.1.joined(separator: ",") : "无")\n"
+        let px = proxySettings()
+        out += "proxy=\(px.0 ? px.1 : "无")\n"
+        return out
+    }
 }
