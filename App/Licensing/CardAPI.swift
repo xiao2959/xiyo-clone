@@ -20,7 +20,13 @@ import UIKit
 
 enum CardAPI {
 
-    static let base = "https://xiaoios.icu"
+    /// 接口入口：首选香港中转（国内快，实测 0.05s），
+    /// 失败自动回退直连域名。两个都不通时才判定没网。
+    static let bases = [
+        "https://card.103-119-2-243.sslip.io",   // 香港中转
+        "https://xiaoios.icu",                   // 直连（备用）
+    ]
+    static var base: String { bases[0] }
 
     static var bundleId: String {
         Bundle.main.bundleIdentifier ?? "app.jackfruit3114.leopard8609"
@@ -93,19 +99,30 @@ enum CardAPI {
 
     // MARK: - 底层
 
+    /// 依次尝试各个入口，哪个先应答就用哪个
     private static func post(_ path: String, _ body: [String: Any]) async -> Info {
-        guard let url = URL(string: base + path) else {
+        var last = Info(ok: false, message: "网络连接失败")
+        for b in bases {
+            let r = await postOnce(b, path, body)
+            if r.reachable { return r }   // 服务器真的回了就算结果
+            last = r
+        }
+        return last
+    }
+
+    private static func postOnce(_ host: String, _ path: String,
+                                 _ body: [String: Any]) async -> Info {
+        guard let url = URL(string: host + path) else {
             return Info(ok: false, message: "接口地址错误")
         }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
-        req.timeoutInterval = 20
+        req.timeoutInterval = 12
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            _ = data
             guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else {
                 return Info(ok: false, message: "服务器返回异常")
             }
