@@ -47,6 +47,7 @@ struct ContentView: View {
     @StateObject private var mapState = MapState()
     @StateObject private var search = SearchModel()
     @StateObject private var netWatch = NetWatch()
+    @StateObject private var insp = LocationInspector()
     @State private var showAirplaneWarn = false
     /// 微调步长（米）
     @AppStorage("nudge_meters") private var nudgeMeters: Double = 10
@@ -673,6 +674,32 @@ struct ContentView: View {
                     LabeledContent("模拟保持",
                                    value: tunnel.lastCoord == nil ? "未启用" : "已开启（每 8 秒刷新）")
                     LabeledContent("状态", value: tunnel.status)
+                }
+
+                Section("定位诊断（看系统真实值）") {
+                    Button(insp.running ? "停止监听" : "开始监听") {
+                        insp.running ? insp.stop() : insp.start()
+                    }
+                    if insp.ts != nil {
+                        LabeledContent("经纬度", value: String(format: "%.7f, %.7f", insp.lat, insp.lon))
+                        LabeledContent("水平精度", value: String(format: "%.1f 米", insp.accuracy))
+                        LabeledContent("时效", value: insp.ageText)
+                        LabeledContent("速度", value: insp.speed < 0 ? "无" : String(format: "%.1f m/s", insp.speed))
+                        LabeledContent("设备标记·软件模拟",
+                                       value: insp.simulatedBySoftware == true ? "是 ⚠️"
+                                              : (insp.simulatedBySoftware == false ? "否 ✅" : "系统未提供"))
+                        LabeledContent("设备标记·外设提供",
+                                       value: insp.producedByAccessory == true ? "是 ⚠️"
+                                              : (insp.producedByAccessory == false ? "否 ✅" : "系统未提供"))
+                        Text(insp.verdict)
+                            .font(.caption)
+                            .foregroundStyle(insp.simulatedBySoftware == true || insp.producedByAccessory == true
+                                             ? .orange : .green)
+                    } else {
+                        Text("点上面开始监听，就能看到系统当前认为你在哪、以及是否被标记为模拟。")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 Section("注入方式") {
