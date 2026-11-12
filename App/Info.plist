@@ -29,7 +29,6 @@
 	<true/>
 	<key>MinimumOSVersion</key>
 	<string>17.0</string>
-	<!-- 配对要用 Bonjour 广播，iOS 14+ 必须声明，否则设备发现不了本机 -->
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_remotepairing-pairable-host._tcp.</string>
@@ -37,17 +36,15 @@
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>用于与本机设备配对并建立调试隧道</string>
-	<!-- 配对时要切到「设置」操作，App 会被切后台；用持续定位保活。
-	     注意：没有这条 UIBackgroundModes=location 时，
-	     设 allowsBackgroundLocationUpdates=true 会抛异常直接闪退。 -->
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>配对期间用于保持后台运行，不会上传你的位置</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>用于「回到当前位置」，不会上传你的位置</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>
+		<string>audio</string>
 	</array>
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>用于「回到当前位置」，不会上传你的位置</string>
-	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>配对期间用于保持后台运行，不会上传你的位置</string>
 	<key>UIFileSharingEnabled</key>
 	<true/>
 	<key>UILaunchScreen</key>

@@ -18,6 +18,7 @@
 
 import Foundation
 import CoreLocation
+import AVFoundation
 import os.log
 
 final class BackgroundKeeper: NSObject, CLLocationManagerDelegate {
@@ -45,6 +46,7 @@ final class BackgroundKeeper: NSObject, CLLocationManagerDelegate {
 
     /// 开始保活
     func start() {
+        startSilentAudio()
         DispatchQueue.main.async {
             self.manager.delegate = self
             self.manager.desiredAccuracy = kCLLocationAccuracyThreeKilometers
@@ -75,6 +77,7 @@ final class BackgroundKeeper: NSObject, CLLocationManagerDelegate {
 
     /// 结束保活
     func stop() {
+        stopSilentAudio()
         DispatchQueue.main.async {
             guard self.running else { return }
             self.manager.stopUpdatingLocation()
@@ -97,5 +100,60 @@ final class BackgroundKeeper: NSObject, CLLocationManagerDelegate {
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         // 用户授权后继续
+    }
+
+    // MARK: - 静音保活
+    //
+    // 为什么要这个：
+    //   切到别的 App（如企业微信）时，系统会挂起我们的进程，
+    //   DVT 的 TCP 连接断开 → 模拟停止 → 位置跳回真实点。
+    //   持续播放一段无声音频能让系统一直不挂起我们。
+
+    private var silentPlayer: AVAudioPlayer?
+
+    private func startSilentAudio() {
+        if silentPlayer != nil { return }
+        // 生成 0.5 秒静音 PCM
+        let sampleRate = 8000.0
+        let frames = Int(sampleRate * 0.5)
+        let byteRate = 2
+        let dataSize = frames * byteRate
+        var wav = Data()
+        func le32(_ v: UInt32) -> Data { withUnsafeBytes(of: v.littleEndian) { Data($0) } }
+        func le16(_ v: UInt16) -> Data { withUnsafeBytes(of: v.littleEndian) { Data($0) } }
+        wav.append("RIFF".data(using: .ascii)!)
+        wav.append(le32(UInt32(36 + dataSize)))
+        wav.append("WAVEfmt ".data(using: .ascii)!)
+        wav.append(le32(16))
+        wav.append(le16(1))                       // PCM
+        wav.append(le16(1))                       // 单声道
+        wav.append(le32(UInt32(sampleRate)))
+        wav.append(le32(UInt32(sampleRate) * UInt32(byteRate)))
+        wav.append(le16(UInt16(byteRate)))
+        wav.append(le16(16))                      // 位宽
+        wav.append("data".data(using: .ascii)!)
+        wav.append(le32(UInt32(dataSize)))
+        wav.append(Data(count: dataSize))         // 全零 = 静音
+
+        do {
+            let player = try AVAudioPlayer(data: wav)
+            player.numberOfLoops = -1
+            player.volume = 0
+            try AVAudioSession.sharedInstance().setCategory(.playback,
+                    options: [.mixWithOthers])
+            try AVAudioSession.sharedInstance().setActive(true)
+            player.play()
+            silentPlayer = player
+            log.info("静音保活已开启")
+        } catch {
+            log.error("静音保活失败: \(error.localizedDescription)")
+        }
+    }
+
+    private func stopSilentAudio() {
+        silentPlayer?.stop()
+        silentPlayer = nil
+        try? AVAudioSession.sharedInstance().setActive(false,
+                options: [.notifyOthersOnDeactivation])
     }
 }

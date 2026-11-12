@@ -177,6 +177,7 @@ final class TunnelModel: ObservableObject {
             tunnelReady = true
             lastInjected = String(format: "%.7f, %.7f", lat, lon)
             lastCoord = (lat, lon)
+            BackgroundKeeper.shared.start()
             status = "模拟成功"
             append("✅ \(r.message)")
             return true
@@ -248,6 +249,7 @@ final class TunnelModel: ObservableObject {
 
     private func keepAliveTick() async {
         guard let c = lastCoord else { return }
+        BackgroundKeeper.shared.start()
 
         if TunnelBridge.alive() {
             _ = await TunnelBridge.moveDVT(lat: c.0, lon: c.1)
@@ -266,6 +268,7 @@ final class TunnelModel: ObservableObject {
 
     func clear() async {
         stopKeepAlive()
+        BackgroundKeeper.shared.stop()
         _ = await TunnelBridge.clearDVT()
         _ = await TunnelBridge.clear()
         lastInjected = nil
